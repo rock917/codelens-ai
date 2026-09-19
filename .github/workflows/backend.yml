@@ -1,0 +1,129 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Create test .env
+        working-directory: backend
+        run: |
+          echo "GROQ_API_KEY=test_key" > .env
+          echo "DATABASE_URL=sqlite+aiosqlite:///./test.db" >> .env
+          echo "CHROMA_PERSIST_DIR=./test_chroma" >> .env
+          echo "EMBEDDING_MODEL=all-MiniLM-L6-v2" >> .env
+          echo "UPLOAD_DIR=./test_uploads" >> .env
+          echo "FRONTEND_URL=http://localhost:5173" >> .env
+
+      - name: Run import checks
+        working-directory: backend
+        run: |
+          python -c "from app.config.settings import settings; print('✅ Settings OK')"
+          python -c "from app.models.repository import Repository; print('✅ Models OK')"
+          python -c "from app.services.file_filter import should_process_file; print('✅ File filter OK')"
+          python -c "from app.services.parser.python_parser import PythonParser; print('✅ Parser OK')"
+          python -c "from app.services.chunker import chunk_parsed_file; print('✅ Chunker OK')"
+          python -c "from app.services.rag.reranker import rerank_chunks; print('✅ Reranker OK')"
+
+      - name: Test file filter
+        working-directory: backend
+        run: |
+          python -c "
+          from app.services.file_filter import should_process_file, detect_language
+          assert should_process_file('auth/service.py') == True
+          assert should_process_file('node_modules/express/index.js') == False
+          assert should_process_file('.git/config') == False
+          assert detect_language('main.py') == 'python'
+          assert detect_language('app.ts') == 'typescript'
+          print('✅ File filter tests passed')
+          "
+
+      - name: Test Python parser
+        working-directory: backend
+        run: |
+          python -c "
+          from app.services.parser.python_parser import PythonParser
+          parser = PythonParser()
+          code = '''
+          class AuthService:
+              def __init__(self, db):
+                  self.db = db
+              def validate_user(self, username, password):
+                  return True
+          '''
+          result = parser.parse('test.py', code)
+          assert result.num_classes == 1
+          assert result.num_functions == 2
+          assert len(result.symbols) == 3
+          print('✅ Python parser tests passed')
+          "
+
+      - name: Test chunker
+        working-directory: backend
+        run: |
+          python -c "
+          from app.services.parser.python_parser import PythonParser
+          from app.services.chunker import chunk_parsed_file
+          parser = PythonParser()
+          code = '''
+          def hello():
+              return 'world'
+          def goodbye():
+              return 'bye'
+          '''
+          parsed = parser.parse('test.py', code)
+          chunks = chunk_parsed_file(parsed, code, 'repo1', 'file1')
+          assert len(chunks) > 0
+          print(f'✅ Chunker tests passed - {len(chunks)} chunks created')
+          "
+
+      - name: Test reranker
+        working-directory: backend
+        run: |
+          python -c "
+          from app.services.rag.reranker import rerank_chunks
+          chunks = [
+              {'content': 'def authenticate(user, password)', 'file_path': 'auth.py', 'symbol_name': 'authenticate', 'score': 0.5},
+              {'content': 'DATABASE_URL = settings.db', 'file_path': 'config.py', 'symbol_name': 'config', 'score': 0.3},
+          ]
+          result = rerank_chunks('authentication', chunks, top_k=2)
+          assert len(result) == 2
+          assert result[0]['final_score'] >= result[1]['final_score']
+          print('✅ Reranker tests passed')
+          "
+
+      - name: Check FastAPI app starts
+        working-directory: backend
+        run: |
+          python -c "
+          import asyncio
+          from main import app
+          print('✅ FastAPI app created successfully')
+          print(f'   Routes: {len(app.routes)}')
+          "
