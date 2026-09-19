@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  GitBranch, FileCode, ChevronRight,
+  FileCode, ChevronRight,
   ChevronDown, Folder, FolderOpen,
-  Code2, Layers, AlertTriangle,
+  Code2, Layers,
   Star, Zap, X, Info, Eye
 } from 'lucide-react'
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'

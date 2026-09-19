@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search } from 'lucide-react'
+import { Plus } from 'lucide-react'
 
 interface TopBarProps {
   title: string

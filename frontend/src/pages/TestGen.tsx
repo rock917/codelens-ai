@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   FlaskConical, GitBranch, FileCode,
-  ChevronRight, Zap, Copy, CheckCheck,
+  Zap, Copy, CheckCheck,
   Loader, FunctionSquare
 } from 'lucide-react'
 import TopBar from '../components/layout/TopBar'

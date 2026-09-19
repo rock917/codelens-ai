@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import TopBar from '../components/layout/TopBar'
 import {
-  getRepositories, sendMessage,
+  getRepositories,
   sendMessageStream,
   getConversations, getChatHistory,
 } from '../services/api'
