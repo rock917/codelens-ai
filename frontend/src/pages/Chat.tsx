@@ -1369,8 +1369,8 @@ export default function Chat() {
         inputRef.current?.focus()
       },
 
-      // onError
-      (err: string) => {
+            // onError
+      (_err: string) => {
         setMessages(prev => prev.map(m =>
           m.id === streamingId
             ? { ...m, content: '⚠️ Something went wrong. Please try again.' }
