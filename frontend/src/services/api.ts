@@ -1,10 +1,9 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
   timeout: 60000,
 })
-
 // ── Repository ──────────────────────────────────────────────
 export const uploadRepository = (file: File) => {
   const form = new FormData()
@@ -68,7 +67,7 @@ export const sendMessageStream = (
   onDone: () => void = () => {},
   onError: (err: string) => void = () => {}
 ) => {
-  return fetch('http://localhost:8000/chat', {
+    return fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

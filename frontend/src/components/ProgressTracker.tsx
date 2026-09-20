@@ -86,7 +86,10 @@ export default function ProgressTracker({ repoId, repoName, onReady }: Props) {
 
   function connect() {
     try {
-      const ws = new WebSocket(`ws://localhost:8000/ws/progress/${repoId}`)
+      const wsUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000')
+  .replace('https://', 'wss://')
+  .replace('http://', 'ws://')
+const ws = new WebSocket(`${wsUrl}/ws/progress/${repoId}`)
       wsRef.current = ws
 
       ws.onopen = () => setConnected(true)
