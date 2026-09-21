@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: codelens-ai-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: DATABASE_URL
+        sync: false
+      - key: CHROMA_PERSIST_DIR
+        value: ./chroma_db
+      - key: EMBEDDING_MODEL
+        value: all-MiniLM-L6-v2
+      - key: MAX_UPLOAD_SIZE_MB
+        value: 100
+      - key: UPLOAD_DIR
+        value: ./uploads
+      - key: FRONTEND_URL
+        value: https://codelens-ai-five.vercel.app
+      - key: DEBUG
+        value: false
+      - key: SECRET_KEY
+        sync: false
