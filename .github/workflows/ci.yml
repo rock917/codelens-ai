@@ -37,7 +37,14 @@ jobs:
 
       - name: Import checks
         working-directory: backend
-        run: python -c "from main import app; print('✅ Backend OK')"
+        run: |
+          python -c "from app.config.settings import settings; print('✅ Settings OK')"
+          python -c "from app.models.repository import Repository; print('✅ Models OK')"
+          python -c "from app.services.file_filter import should_process_file; print('✅ File filter OK')"
+          python -c "from app.services.parser.python_parser import PythonParser; print('✅ Parser OK')"
+          python -c "from app.services.chunker import chunk_parsed_file; print('✅ Chunker OK')"
+          python -c "from app.services.rag.reranker import rerank_chunks; print('✅ Reranker OK')"
+          python -c "from main import app; print('✅ Backend OK')"
 
   frontend-checks:
     name: Frontend Checks
