@@ -5,7 +5,10 @@ from app.config.settings import settings
 
 class GroqProvider(BaseLLMProvider):
     def __init__(self):
-        self.client = AsyncGroq(api_key=settings.GROQ_API_KEY)
+        self.client = AsyncGroq(
+            api_key=settings.GROQ_API_KEY,
+            timeout=30.0  # 30 second timeout per request
+        )
         self.model = settings.GROQ_MODEL
 
     async def chat(

@@ -27,3 +27,5 @@ services:
         value: false
       - key: SECRET_KEY
         sync: false
+      - key: USE_GPU
+        value: false
