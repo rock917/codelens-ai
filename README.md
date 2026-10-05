@@ -410,25 +410,7 @@ cp .env.example .env
 # Edit .env with your actual values (see below)
 ```
 
-**`.env` file:**
 
-```env
-# Supabase Session Pooler URL
-DATABASE_URL=postgresql://postgres.xxxx:[PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
-
-GROQ_API_KEY=gsk_your_key_here
-GROQ_MODEL=openai/gpt-oss-120b
-
-EMBEDDING_MODEL=all-MiniLM-L6-v2
-USE_GPU=false
-
-CHROMA_PERSIST_DIR=./chroma_db
-UPLOAD_DIR=./uploads
-MAX_UPLOAD_SIZE_MB=100
-
-FRONTEND_URL=http://localhost:5173
-SECRET_KEY=your-secret-key-here
-```
 
 ```bash
 uvicorn main:app --reload --port 8000
@@ -600,7 +582,7 @@ They serve completely different query patterns. PostgreSQL stores structured rel
 
 ---
 
-## 🎤 Interview Q&A
+## 🎤 Q&A
 
 <details>
 <summary><b>Explain your RAG pipeline end to end</b></summary>
