@@ -63,15 +63,44 @@ A 100,000 line codebase ≈ 3 million tokens. Sending it all to an LLM is imposs
 - Stale vector cleanup in ChromaDB
 - 10x faster on subsequent re-indexing
   </td> </tr> </table> 
-📸 Screenshots
-🏠 Dashboard
-<img src="docs/screenshots/dashboard.png" alt="CodeLens AI Dashboard" width="100%">
+## 📸 Screenshots
 
-💬 AI Chat
-<img src="docs/screenshots/chat.png" alt="CodeLens AI Chat" width="100%">
+### 🏠 Dashboard
 
-🔍 Code Analysis
-<img src="docs/screenshots/analysis.png" alt="CodeLens AI Analysis" width="100%">
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="CodeLens AI Dashboard" width="95%">
+</p>
+
+<p align="center">
+  <i>Repository intelligence dashboard showing repository statistics, LOC, chunks, issues, and health scores.</i>
+</p>
+
+<br>
+
+### 🤖 AI Chat & Code Analysis
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/chat.png" alt="CodeLens AI Chat" width="100%">
+      <br>
+      <b>AI Chat</b>
+      <br>
+      <sub>Ask questions about your codebase using RAG-powered semantic retrieval.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/analysis.png" alt="CodeLens AI Analysis" width="100%">
+      <br>
+      <b>Code Analysis</b>
+      <br>
+      <sub>Identify code quality, complexity, security, and maintainability issues.</sub>
+    </td>
+  </tr>
+</table>
+
+<br>
+
+---
 
 🏗️ System Architecture
 ┌────────────────────────────────────────────────────────────────────┐
