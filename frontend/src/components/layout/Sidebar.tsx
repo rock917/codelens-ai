@@ -65,6 +65,12 @@ export default function Sidebar() {
         ))}
       </nav>
 
+      <nav aria-label="Public information" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', padding: '12px', fontSize: '11px' }}>
+        <a href="/about.html">About</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/terms.html">Terms</a>
+      </nav>
+
       {/* Bottom */}
       <div style={{
         padding: '12px', borderTop: '1px solid var(--border)', marginTop: '16px',
