@@ -2,7 +2,28 @@
 
 Scope agreed on 2026-11-11: keep Vercel and Supabase; move FastAPI, CPU embeddings,
 uploaded repositories, Chroma and the model cache from Render to Azure.
-No Azure resources have been provisioned and no production settings have changed.
+Azure resources have not been provisioned. Publishing main can trigger existing
+Vercel/Render deployments; it does not complete the database migration or Azure cutover.
+
+## Current release and required startup order
+
+The owner has authorized consolidating the prepared code on main and preparing Azure.
+Google/GitHub sign-in is the current launch scope. Keep `VITE_ENABLE_EMAIL_AUTH`
+absent or `false`; SMTP/email-password, the lifetime quota and caching come later.
+
+Do not defer the ownership migration until after starting this backend: startup
+intentionally refuses the old/publicly accessible schema. Back up and validate the
+migration before starting against the production database. Stop the older API when
+applying the migration so it cannot continue accepting unauthenticated requests.
+An Azure VM/container can be prepared privately first, but is not a working public
+release until migration, Auth settings and end-to-end checks pass.
+
+Pushing main may redeploy existing Vercel/Render services automatically. A new Render
+backend will fail startup if its migration is missing. A Vercel build without the
+public Supabase settings displays sign-in unavailable. Configure environment values
+through the host dashboards; do not paste secrets into chat or Git. To preserve the
+old demo until cutover, pause automatic deployments in the host dashboards before a
+release push; do not assume a repository file overrides current dashboard settings.
 
 ## Hosting choice to review
 
@@ -70,6 +91,55 @@ acceptance checks in [ACCOUNTS.md](ACCOUNTS.md) before deployment. Configure
 `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` on the backend and the corresponding
 VITE variables on Vercel. Quotas and production ingestion limits remain pending.
 
+## Optional HTTPS proxy
+
+`compose.https.yaml` adds Caddy with persistent certificate storage and proxies both
+WebSocket progress and streamed chat. Set `API_DOMAIN` to a public DNS hostname
+pointing to the VM's static public IP. Use a domain you control or an available Azure
+public-IP DNS label. Allow inbound TCP 80/443 and restrict SSH to your own source IP;
+do not expose port 8000 publicly. DNS, firewall rules and certificate issuance must
+be tested on the actual host. See [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https)
+and [reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
+
+Supply these host settings in a private file outside the repository, for example
+`/etc/codelens/runtime.env`, readable only by the deployment operator. This is a
+configuration specification, not a request to share values:
+
+| Setting | Required value |
+| --- | --- |
+| DATABASE_URL | Existing Supabase SQL connection for a trusted backend role |
+| GROQ_API_KEY | Existing Groq credential |
+| GROQ_MODEL | Model available to your account |
+| SUPABASE_URL | `https://vwzaoyvpruwjohmbugtm.supabase.co` |
+| SUPABASE_PUBLISHABLE_KEY | Same project's public Auth key |
+| FRONTEND_URL | `https://codelens-ai-five.vercel.app` |
+| API_DOMAIN | Selected public API hostname, without scheme/path |
+
+From the repository root on the VM, after the migration and settings are ready:
+
+```sh
+docker compose --env-file /etc/codelens/runtime.env -f deploy/azure-vm/compose.yaml -f deploy/azure-vm/compose.https.yaml config --quiet
+docker compose --env-file /etc/codelens/runtime.env -f deploy/azure-vm/compose.yaml -f deploy/azure-vm/compose.https.yaml up -d --build
+curl --fail http://127.0.0.1:8000/health
+```
+
+Use `config --quiet`; rendering the full configuration can print credentials.
+Verify `https://YOUR_API_HOST/health` separately. The public `/health` endpoint checks
+liveness, not authentication or embeddings; it is not release acceptance by itself.
+Before public access, `/repositories` without a bearer token must return 401, and
+an authenticated user must not see another user's repository IDs.
+
+To validate the Compose wiring locally without secrets or starting containers:
+
+```sh
+python scripts/check_azure_config.py
+```
+
+This check supplies dummy values and an explicit empty environment file. It checks
+configuration only; it does not validate the Docker image, Caddy runtime, real
+Supabase/PostgreSQL permissions, DNS/TLS or Azure networking. Never use
+`docker compose down -v` during normal updates: it deletes persistent volumes.
+
 ## Cutover and persistence checks
 
 1. Verify the chosen region, quota, estimated spend and HTTPS hostname.
@@ -81,14 +151,19 @@ VITE variables on Vercel. Quotas and production ingestion limits remain pending.
    If Render data has already disappeared, repositories need re-upload/re-clone;
    the current incremental indexer does not rebuild missing vectors for unchanged
    files. Do not delete existing Supabase records without a reviewed migration.
-4. Start the Azure backend with the existing Supabase URL and private Groq key.
+4. Validate and apply `backend/migrations/001_private_accounts.sql` after backup
+   and stopping the old API. Confirm the trusted backend role can access the tables
+   and browser roles cannot. Assign only the selected legacy repositories to their
+   verified owner. Start the Azure backend with its required settings.
    Download/warm the embedding model once before inviting users.
-5. Test ZIP and GitHub ingestion, health during ingestion, vector search, real Groq
+5. Test Google/GitHub sign-in, logout, token refresh and two-account isolation first.
+   Then test ZIP and GitHub ingestion, health during ingestion, vector search, real Groq
    chat, streaming, file viewing and static analysis. Test a representative large
    repository while monitoring memory and disk use.
 6. Restart the container and the VM; confirm source files, search results and model
    cache persist. Back up the named volume while writes are stopped and test restore.
-7. Change Vercel's `VITE_API_URL` to the new HTTPS API origin and redeploy the
+7. Set Vercel `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` for the same
+   Auth project. Keep `VITE_ENABLE_EMAIL_AUTH=false`. Change Vercel's `VITE_API_URL` to the new HTTPS API origin and redeploy the
    frontend (Vite embeds this at build time). Verify CORS from the actual Vercel
    origin, WebSockets and streaming in a browser.
 8. Keep a rollback path to Render until acceptance checks pass. Do not run ingestion
@@ -98,6 +173,6 @@ VITE variables on Vercel. Quotas and production ingestion limits remain pending.
 
 Azure login/subscription selection, allowed region and VM quota, remaining credit,
 desired credit lifetime/uptime, HTTPS hostname, and a secure way to supply runtime
-secrets are needed before deployment. The owner authorized publishing the fixes
-on a branch in the existing GitHub repository; deployment and cutover are separate
-steps after reviewing the configuration and cost estimate.
+secrets are needed before deployment. The owner authorized pushing the prepared code
+to main. Azure resource creation and cutover remain separate steps after selecting
+the configuration, reviewing the cost estimate and completing required migration checks.

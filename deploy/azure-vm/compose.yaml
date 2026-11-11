@@ -14,7 +14,7 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:?Supply your Supabase project URL}
       SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:?Supply the public Auth API key}
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
-      FRONTEND_URL: https://codelens-ai-five.vercel.app
+      FRONTEND_URL: ${FRONTEND_URL:-https://codelens-ai-five.vercel.app}
       DEBUG: "false"
       USE_GPU: "false"
       UPLOAD_DIR: /data/uploads

@@ -1,0 +1,7 @@
+# API_DOMAIN is a hostname only, without https:// or a path.
+{$API_DOMAIN} {
+    reverse_proxy backend:8000 {
+        # Flush streamed AI responses immediately. WebSockets are proxied natively.
+        flush_interval -1
+    }
+}

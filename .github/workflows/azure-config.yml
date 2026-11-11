@@ -1,0 +1,35 @@
+name: Azure configuration checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/azure-vm/**'
+      - 'scripts/check_azure_config.py'
+      - '.github/workflows/azure-config.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deploy/azure-vm/**'
+      - 'scripts/check_azure_config.py'
+      - '.github/workflows/azure-config.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate Compose with dummy settings
+        run: python scripts/check_azure_config.py
+      - name: Validate HTTPS proxy without starting a server
+        run: >-
+          docker run --rm --network none
+          -e API_DOMAIN=api.example.com
+          -v "$PWD/deploy/azure-vm/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

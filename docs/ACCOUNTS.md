@@ -28,7 +28,9 @@ before opting into email authentication. The saved reset redirect can remain.
 Remaining launch steps: verify Vercel/Render environment settings, validate the
 migration on a database copy, back up production and schedule the migration, then
 validate the protected backend/frontend and real provider flows before releasing.
-This update does not authorize a production deployment.
+The owner subsequently authorized publishing the combined code on main for Azure
+preparation. Database migration and real-provider acceptance are still required
+before treating the deployed system as a completed private-account release.
 
 ## Architecture
 

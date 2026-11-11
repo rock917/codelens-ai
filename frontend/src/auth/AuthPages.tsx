@@ -10,6 +10,9 @@ import './auth.css'
 export function AuthFrame({ children }: { children: ReactNode }) {
   return <main className="auth-page"><section className="auth-card">
     <div className="auth-brand"><Zap aria-hidden="true" /> CodeLens AI</div>{children}
+    <nav aria-label="Public information" style={{ display: 'flex', justifyContent: 'center', gap: 16, marginTop: 24, fontSize: 12 }}>
+      <a href="/about.html">About</a><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a>
+    </nav>
   </section></main>
 }
 
