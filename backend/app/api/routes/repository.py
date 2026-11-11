@@ -17,9 +17,8 @@ from app.schemas.repository import (
 )
 from app.services.repository_service import (
     create_repository,
-    process_zip_upload,
-    process_github_url
 )
+from app.workers.ingestion_worker import run_zip_ingestion, run_github_ingestion
 from app.config.settings import settings
 
 
@@ -62,8 +61,7 @@ async def upload_zip(
 
     # Process in background
     background_tasks.add_task(
-        process_zip_upload,
-        db,
+        run_zip_ingestion,
         repo.id,
         temp_path
     )
@@ -94,8 +92,7 @@ async def ingest_github(
     repo = await create_repository(db, name, "github", url)
 
     background_tasks.add_task(
-        process_github_url,
-        db,
+        run_github_ingestion,
         repo.id,
         url
     )

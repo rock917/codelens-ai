@@ -1,11 +1,13 @@
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 from typing import List, Dict, Optional, Any
+from threading import RLock
 from app.config.settings import settings
 
 class VectorStore:
     _instance = None
     _client = None
+    _lock = RLock()
 
     def __new__(cls):
         if cls._instance is None:
@@ -13,11 +15,12 @@ class VectorStore:
         return cls._instance
 
     def get_client(self):
-        if self._client is None:
-            self._client = chromadb.PersistentClient(
-                path=settings.CHROMA_PERSIST_DIR
-            )
-        return self._client
+        with self._lock:
+            if self._client is None:
+                self._client = chromadb.PersistentClient(
+                    path=settings.CHROMA_PERSIST_DIR
+                )
+            return self._client
 
     def get_collection(self, repository_id: str):
         client = self.get_client()

@@ -1,0 +1,16 @@
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!index.html
+!vite.config.ts
+!tsconfig*.json
+!nginx.conf
+!src/
+!src/**
+!public/
+!public/**
+**/.env*
+**/.gitignore
+**/*.pem
+**/*.key

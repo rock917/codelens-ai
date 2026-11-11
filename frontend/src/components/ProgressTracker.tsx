@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { getRepositoryStatus, API_BASE_URL } from '../services/api'
 import {
   CheckCircle, XCircle, Loader,
   FileCode, Layers, Zap
@@ -75,41 +76,60 @@ function StepIndicator({ step, currentStatus }: {
 export default function ProgressTracker({ repoId, repoName, onReady }: Props) {
   const [progress, setProgress] = useState<ProgressData | null>(null)
   const [connected, setConnected] = useState(false)
-  const wsRef = useRef<WebSocket | null>(null)
+  const onReadyRef = useRef(onReady)
+  useEffect(() => { onReadyRef.current = onReady }, [onReady])
 
   useEffect(() => {
-    connect()
-    return () => {
-      wsRef.current?.close()
+    let disposed = false
+    let terminal = false
+    let ws: WebSocket | undefined
+    let pollTimer: ReturnType<typeof setTimeout> | undefined
+    setProgress(null)
+    setConnected(false)
+
+    function accept(data: ProgressData) {
+      if (disposed || terminal) return
+      setProgress(data)
+      if (data.status === 'READY' || data.status === 'FAILED') {
+        terminal = true
+        clearTimeout(pollTimer)
+        ws?.close()
+        onReadyRef.current?.()
+      }
     }
-  }, [repoId])
 
-  function connect() {
+    async function poll() {
+      try {
+        const { data } = await getRepositoryStatus(repoId)
+        accept({ ...data, type: 'status', message: data.error_message || `Status: ${data.status}` })
+      } catch {
+        // Transient cold starts/network failures must not stop polling.
+      } finally {
+        if (!disposed && !terminal) pollTimer = setTimeout(poll, 3000)
+      }
+    }
+    void poll()
     try {
-      const wsUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000')
-  .replace('https://', 'wss://')
-  .replace('http://', 'ws://')
-const ws = new WebSocket(`${wsUrl}/ws/progress/${repoId}`)
-      wsRef.current = ws
-
-      ws.onopen = () => setConnected(true)
-
+      const wsUrl = new URL(API_BASE_URL, window.location.origin)
+      wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl.pathname = `${wsUrl.pathname.replace(/\/$/, '')}/ws/progress/${repoId}`
+      ws = new WebSocket(wsUrl)
+      ws.onopen = () => { if (!disposed) setConnected(true) }
       ws.onmessage = (e) => {
         try {
-          const data: ProgressData = JSON.parse(e.data)
-          setProgress(data)
-          if (data.status === 'READY' && onReady) {
-            setTimeout(onReady, 1000)
-          }
+          accept(JSON.parse(e.data))
         } catch { }
       }
-
-      ws.onclose = () => setConnected(false)
-      ws.onerror = () => setConnected(false)
+      ws.onclose = ws.onerror = () => { if (!disposed) setConnected(false) }
     } catch (err) {
       console.error('WebSocket error:', err)
     }
-  }
+    return () => {
+      disposed = true
+      clearTimeout(pollTimer)
+      ws?.close()
+    }
+  }, [repoId])
 
   if (!progress) {
     return (

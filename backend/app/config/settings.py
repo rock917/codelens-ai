@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
+from pydantic import Field
 
 class Settings(BaseSettings):
     # App
@@ -21,6 +22,10 @@ class Settings(BaseSettings):
 
     # Embeddings
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    EMBEDDING_WRITE_BATCH_SIZE: int = Field(default=32, ge=1, le=512)
+    EMBEDDING_CPU_THREADS: int = Field(default=2, ge=1)
+    # In-process ingestion requires exactly one API worker and one instance.
+    RECOVER_INTERRUPTED_JOBS: bool = True
 
     # File Upload
     MAX_UPLOAD_SIZE_MB: int = 100

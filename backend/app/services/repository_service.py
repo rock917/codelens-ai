@@ -1,4 +1,5 @@
 import os
+import asyncio
 import uuid
 import hashlib
 import zipfile
@@ -28,8 +29,7 @@ from app.services.file_filter import (
 from app.services.parser.parser_factory import ParserFactory
 from app.services.importance_scorer import calculate_importance_score
 from app.services.chunker import chunk_parsed_file
-from app.services.embedding_service import embedding_service
-from app.services.vector_store import vector_store
+from app.services.vector_indexing import index_repository_vectors
 from app.config.settings import settings
 
 import git
@@ -106,8 +106,7 @@ async def update_repository_status(
     if repo:
         repo.status = status
 
-        if error_message:
-            repo.error_message = error_message
+        repo.error_message = error_message
 
         await db.commit()
 
@@ -171,12 +170,15 @@ async def process_zip_upload(
             f"✅ Repository {repo_id} is READY"
         )
 
+        asyncio.create_task(_run_summarization_background(repo_id))
+
     except Exception as e:
 
         print(
             f"❌ Repository {repo_id} FAILED: {e}"
         )
 
+        await db.rollback()
         await update_repository_status(
             db,
             repo_id,
@@ -212,7 +214,8 @@ async def process_github_url(
             exist_ok=True,
         )
 
-        git.Repo.clone_from(
+        await asyncio.to_thread(
+            git.Repo.clone_from,
             github_url,
             clone_dir,
             depth=1,
@@ -234,12 +237,15 @@ async def process_github_url(
             f"✅ Repository {repo_id} is READY"
         )
 
+        asyncio.create_task(_run_summarization_background(repo_id))
+
     except Exception as e:
 
         print(
             f"❌ Repository {repo_id} FAILED: {e}"
         )
 
+        await db.rollback()
         await update_repository_status(
             db,
             repo_id,
@@ -336,7 +342,7 @@ async def index_directory(
     }
 
     file_records = []
-    all_chunks = []
+    total_chunks = 0
 
     await update_repository_status(
         db,
@@ -370,7 +376,8 @@ async def index_directory(
             "typescript",
         ):
 
-            parsed = ParserFactory.parse_file(
+            parsed = await asyncio.to_thread(
+                ParserFactory.parse_file,
                 raw["path"],
                 content,
                 lang,
@@ -486,7 +493,7 @@ async def index_directory(
                 file_id=file_id,
             )
 
-            all_chunks.extend(chunks)
+            total_chunks += len(chunks)
 
             # Save chunks to DB
             for chunk in chunks:
@@ -534,105 +541,9 @@ async def index_directory(
         )
 
         db.add(file_record)
+        await db.flush()
 
     await db.commit()
-
-    # Generate embeddings and store in ChromaDB
-    if all_chunks:
-
-        await update_repository_status(
-            db,
-            repo_id,
-            RepositoryStatus.ANALYZING,
-        )
-
-        print(
-            f"⏳ Generating embeddings for "
-            f"{len(all_chunks)} chunks..."
-        )
-
-        texts = []
-
-        for chunk in all_chunks:
-
-            # Enrich text with metadata for better retrieval
-            text = (
-                f"File: {chunk.file_path}\n"
-            )
-
-            if chunk.symbol_name:
-
-                text += (
-                    f"Symbol: "
-                    f"{chunk.symbol_name} "
-                    f"({chunk.symbol_type})\n"
-                )
-
-            text += (
-                f"\n{chunk.content}"
-            )
-
-            texts.append(text)
-
-        embeddings = embedding_service.embed_batch(
-            texts
-        )
-
-        # Get chunk IDs from DB
-        from sqlalchemy import select as sa_select
-
-        result = await db.execute(
-            sa_select(
-                CodeChunkModel
-            ).where(
-                CodeChunkModel.repository_id
-                == repo_id
-            )
-        )
-
-        db_chunks = result.scalars().all()
-
-        chunk_ids = [
-            c.chroma_id
-            for c in db_chunks
-        ]
-
-        documents = [
-            c.content
-            for c in db_chunks
-        ]
-
-        metadatas = [
-            {
-                "repository_id": c.repository_id,
-                "file_path": c.file_path,
-                "symbol_name": (
-                    c.symbol_name or ""
-                ),
-                "symbol_type": (
-                    c.symbol_type or ""
-                ),
-                "language": (
-                    c.language or ""
-                ),
-                "start_line": c.start_line,
-                "end_line": c.end_line,
-            }
-            for c in db_chunks
-        ]
-
-        vector_store.add_chunks(
-            repository_id=repo_id,
-            chunk_ids=chunk_ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas,
-        )
-
-        print(
-            f"✅ Stored {len(chunk_ids)} "
-            f"chunks in ChromaDB"
-        )
 
     # Update final stats
     result = await db.execute(
@@ -659,41 +570,32 @@ async def index_directory(
             language_counts
         )
 
-        repo.total_chunks = len(
-            all_chunks
-        )
+        repo.total_chunks = total_chunks
 
         await db.commit()
 
-    # Run selective summarization for HIGH importance files
-    # Use asyncio timeout to prevent hanging forever
-    import asyncio
-
-    try:
-
-        from app.services.summarization_service import (
-            run_selective_summarization,
-        )
-
-        await asyncio.wait_for(
-            run_selective_summarization(
-                db,
-                repo_id,
-            ),
-            timeout=120.0,
-        )
-
-    except asyncio.TimeoutError:
-
-        print(
-            "⚠️ Summarization timed out "
-            "after 120s — continuing without summaries"
-        )
-
-    except Exception as e:
-
-        print(
-            f"⚠️ Summarization error: {e}"
-        )
+    # Publish file counts before the potentially slow inference stage.
+    if total_chunks:
+        await update_repository_status(db, repo_id, RepositoryStatus.ANALYZING)
+        await index_repository_vectors(db, repo_id)
 
     return file_records
+
+
+async def _run_summarization_background(repo_id: str):
+    """Runs summarization after READY — non-blocking."""
+    print(f"⏳ Background summarization starting for {repo_id}...")
+    try:
+        import asyncio
+        from app.database.base import AsyncSessionLocal
+        from app.services.summarization_service import run_selective_summarization
+        async with AsyncSessionLocal() as db:
+            await asyncio.wait_for(
+                run_selective_summarization(db, repo_id),
+                timeout=300.0
+            )
+        print(f"✅ Background summarization complete for {repo_id}")
+    except asyncio.TimeoutError:
+        print(f"⚠️ Summarization timed out for {repo_id}")
+    except Exception as e:
+        print(f"⚠️ Summarization failed for {repo_id}: {e}")

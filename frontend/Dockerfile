@@ -1,13 +1,18 @@
-FROM node:18-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 # Copy source
-COPY . .
+COPY src ./src
+COPY public ./public
+COPY index.html vite.config.ts tsconfig*.json ./
+
+ARG VITE_API_URL=/api
+ENV VITE_API_URL=$VITE_API_URL
 
 # Build
 RUN npm run build
