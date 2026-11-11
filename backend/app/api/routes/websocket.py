@@ -45,7 +45,7 @@ async def websocket_progress(websocket: WebSocket, repo_id: str):
                     "total_files": repo.total_files,
                     "processed_files": repo.processed_files,
                     "total_chunks": repo.total_chunks,
-                    "message": f"Status: {repo.status}"
+                    "message": repo.error_message or _get_message(repo.status)
                 }))
 
         # Poll for updates
@@ -65,7 +65,7 @@ async def websocket_progress(websocket: WebSocket, repo_id: str):
                     "total_files": repo.total_files,
                     "processed_files": repo.processed_files,
                     "total_chunks": repo.total_chunks,
-                    "message": _get_message(repo.status)
+                    "message": repo.error_message or _get_message(repo.status)
                 }))
 
                 if repo.status in ("READY", "FAILED"):
@@ -84,8 +84,8 @@ def _get_message(status: str) -> str:
     messages = {
         "UPLOADING": "Extracting repository...",
         "PARSING": "Parsing source files...",
-        "INDEXING": "Generating embeddings...",
-        "ANALYZING": "Running AI summarization...",
+        "INDEXING": "Indexing source files...",
+        "ANALYZING": "Generating embeddings and storing vectors...",
         "READY": "Repository ready!",
         "FAILED": "Processing failed"
     }

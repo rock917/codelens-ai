@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, AsyncGenerator, Tuple
+import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -41,7 +42,8 @@ async def retrieve_chunks(
     # 1. EMBED QUERY
     # ========================================================
 
-    query_embedding = embedding_service.embed_text(
+    query_embedding = await asyncio.to_thread(
+        embedding_service.embed_text,
         query
     )
 
@@ -49,7 +51,8 @@ async def retrieve_chunks(
     # 2. VECTOR SEARCH
     # ========================================================
 
-    results = vector_store.search(
+    results = await asyncio.to_thread(
+        vector_store.search,
         repository_id=repository_id,
         query_embedding=query_embedding,
         n_results=n_initial

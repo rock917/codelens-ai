@@ -1,7 +1,9 @@
 import axios from 'axios'
 
+export const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
+  baseURL: API_BASE_URL,
   timeout: 60000,
 })
 // ── Repository ──────────────────────────────────────────────
@@ -67,7 +69,7 @@ export const sendMessageStream = (
   onDone: () => void = () => {},
   onError: (err: string) => void = () => {}
 ) => {
-    return fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/chat`, {
+    return fetch(`${API_BASE_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

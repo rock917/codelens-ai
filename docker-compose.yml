@@ -11,7 +11,7 @@ services:
     environment:
       - APP_NAME=CodeLens AI
       - DEBUG=False
-      - DATABASE_URL=sqlite+aiosqlite:///./codelens.db
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/codelens.db
       - CHROMA_PERSIST_DIR=./chroma_db
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
@@ -20,7 +20,7 @@ services:
       - UPLOAD_DIR=./uploads
       - FRONTEND_URL=http://localhost:3000
     volumes:
-      - backend_db:/app/codelens.db
+      - backend_db:/app/data
       - backend_uploads:/app/uploads
       - backend_chroma:/app/chroma_db
     restart: unless-stopped

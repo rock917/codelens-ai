@@ -366,6 +366,11 @@ export default function Repositories() {
                 </div>
 
                 {/* Processing bar — WebSocket live progress */}
+                {repo.status === 'FAILED' && repo.error_message && (
+                  <p role="alert" style={{ color: 'var(--danger)', marginBottom: '12px' }}>
+                    {repo.error_message}
+                  </p>
+                )}
                 {isProcessing && (
                   <div style={{ marginBottom: '16px' }}>
                     <ProgressTracker

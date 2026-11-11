@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database.base import get_db
@@ -43,7 +44,7 @@ async def search_code(
         raise HTTPException(400, f"Repository is not ready. Status: {repo.status}")
 
     # Embed query
-    query_embedding = embedding_service.embed_text(request.query)
+    query_embedding = await asyncio.to_thread(embedding_service.embed_text, request.query)
 
     # Build filter
     where = None
@@ -51,7 +52,8 @@ async def search_code(
         where = {"language": request.language}
 
     # Search ChromaDB
-    results = vector_store.search(
+    results = await asyncio.to_thread(
+        vector_store.search,
         repository_id=request.repository_id,
         query_embedding=query_embedding,
         n_results=request.n_results,

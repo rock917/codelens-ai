@@ -127,3 +127,6 @@ jobs:
           print('✅ FastAPI app created successfully')
           print(f'   Routes: {len(app.routes)}')
           "
+
+      - name: Test isolated API workflow and ingestion regressions
+        run: python scripts/check_backend.py

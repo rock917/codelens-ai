@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.database.base import init_db
+from app.database.base import init_db, recover_interrupted_jobs, engine
 from app.config.settings import settings
 from app.api.routes import (
     repository, symbols, search,
@@ -16,8 +16,11 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(settings.CHROMA_PERSIST_DIR, exist_ok=True)
     await init_db()
+    if settings.RECOVER_INTERRUPTED_JOBS:
+        await recover_interrupted_jobs()
     print("✅ CodeLens AI is ready!")
     yield
+    await engine.dispose()
     print("👋 Shutting down CodeLens AI...")
 
 app = FastAPI(
