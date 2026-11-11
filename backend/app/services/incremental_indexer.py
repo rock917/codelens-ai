@@ -82,6 +82,8 @@ async def incremental_index(
 
             if not should_process_file(relative_path):
                 continue
+            if not Path(file_path).resolve().is_relative_to(Path(directory).resolve()):
+                continue
             if is_binary_file(file_path):
                 continue
 

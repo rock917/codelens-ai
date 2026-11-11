@@ -1,92 +1,56 @@
 import asyncio
-import json
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from sqlalchemy import select
+from app.auth import authenticate_token
+from app.config.settings import settings
 from app.database.base import AsyncSessionLocal
 from app.models.repository import Repository
 
 router = APIRouter()
 
-# Store active connections per repository
-active_connections: dict[str, list[WebSocket]] = {}
 
-async def broadcast_progress(repo_id: str, data: dict):
-    """Send progress update to all connected clients for a repo."""
-    if repo_id not in active_connections:
-        return
-    dead = []
-    for ws in active_connections[repo_id]:
-        try:
-            await ws.send_text(json.dumps(data))
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        active_connections[repo_id].remove(ws)
-
-@router.websocket("/ws/progress/{repo_id}")
+@router.websocket('/ws/progress/{repo_id}')
 async def websocket_progress(websocket: WebSocket, repo_id: str):
+    if websocket.headers.get('origin') != settings.FRONTEND_URL.rstrip('/'):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
-
-    if repo_id not in active_connections:
-        active_connections[repo_id] = []
-    active_connections[repo_id].append(websocket)
-
     try:
-        # Send current status immediately
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Repository).where(Repository.id == repo_id)
-            )
-            repo = result.scalar_one_or_none()
-            if repo:
-                await websocket.send_text(json.dumps({
-                    "type": "status",
-                    "status": repo.status,
-                    "total_files": repo.total_files,
-                    "processed_files": repo.processed_files,
-                    "total_chunks": repo.total_chunks,
-                    "message": repo.error_message or _get_message(repo.status)
-                }))
-
-        # Poll for updates
+        # Tokens stay out of URLs and access logs. Authenticate before sending data.
+        message = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+        if not isinstance(message, dict) or message.get('type') != 'authenticate':
+            await websocket.close(code=4401)
+            return
+        token = message.get('access_token')
+        if not isinstance(token, str):
+            await websocket.close(code=4401)
+            return
+        user = await authenticate_token(token)
+        verified_at = asyncio.get_running_loop().time()
         while True:
-            await asyncio.sleep(2)
+            if asyncio.get_running_loop().time() - verified_at >= 30:
+                user = await authenticate_token(token)
+                verified_at = asyncio.get_running_loop().time()
             async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(Repository).where(Repository.id == repo_id)
-                )
-                repo = result.scalar_one_or_none()
-                if not repo:
-                    break
-
-                await websocket.send_text(json.dumps({
-                    "type": "status",
-                    "status": repo.status,
-                    "total_files": repo.total_files,
-                    "processed_files": repo.processed_files,
-                    "total_chunks": repo.total_chunks,
-                    "message": repo.error_message or _get_message(repo.status)
-                }))
-
-                if repo.status in ("READY", "FAILED"):
-                    break
-
+                repo = (await db.execute(select(Repository).where(
+                    Repository.id == repo_id, Repository.owner_id == user.id,
+                ))).scalar_one_or_none()
+                if repo is None:
+                    await websocket.close(code=4404)
+                    return
+                await websocket.send_json({
+                    'type': 'status', 'status': repo.status,
+                    'total_files': repo.total_files, 'processed_files': repo.processed_files,
+                    'total_chunks': repo.total_chunks,
+                    'message': repo.error_message or f'Status: {repo.status}',
+                })
+                if repo.status in ('READY', 'FAILED'):
+                    await websocket.close(code=1000)
+                    return
+            await asyncio.sleep(2)
+    except HTTPException as exc:
+        await websocket.close(code=1013 if exc.status_code == 503 else 4401)
+    except (asyncio.TimeoutError, ValueError):
+        await websocket.close(code=4401)
     except WebSocketDisconnect:
         pass
-    finally:
-        if repo_id in active_connections:
-            try:
-                active_connections[repo_id].remove(websocket)
-            except ValueError:
-                pass
-
-def _get_message(status: str) -> str:
-    messages = {
-        "UPLOADING": "Extracting repository...",
-        "PARSING": "Parsing source files...",
-        "INDEXING": "Indexing source files...",
-        "ANALYZING": "Generating embeddings and storing vectors...",
-        "READY": "Repository ready!",
-        "FAILED": "Processing failed"
-    }
-    return messages.get(status, status)

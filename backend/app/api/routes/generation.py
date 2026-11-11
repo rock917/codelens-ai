@@ -1,3 +1,4 @@
+from app.auth import AuthUser, get_current_user, owned_file, owned_repository
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -29,9 +30,11 @@ class DocGenerationRequest(BaseModel):
 @router.post("/tests")
 async def generate_tests(
     request: TestGenerationRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
     # Verify repo
+    await owned_file(db, request.file_id, user.id, request.repository_id)
     repo_result = await db.execute(
         select(Repository).where(
             Repository.id == request.repository_id
@@ -63,8 +66,10 @@ async def generate_tests(
 @router.post("/docs")
 async def generate_docs(
     request: DocGenerationRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, request.repository_id, user.id)
     repo_result = await db.execute(
         select(Repository).where(
             Repository.id == request.repository_id
@@ -100,8 +105,10 @@ async def generate_docs(
 async def get_testable_symbols(
     repo_id: str,
     file_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_file(db, file_id, user.id, repo_id)
     result = await db.execute(
         select(Symbol)
         .where(Symbol.file_id == file_id)

@@ -21,6 +21,8 @@ class Repository(Base):
     __tablename__ = "repositories"
 
     id = Column(String, primary_key=True)
+    # NULL is reserved for legacy repositories, hidden until explicitly assigned.
+    owner_id = Column(String, nullable=True, index=True)
     name = Column(String, nullable=False)
     source_type = Column(String, nullable=False)  # zip or github
     source_url = Column(String, nullable=True)

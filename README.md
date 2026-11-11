@@ -564,15 +564,16 @@ They serve completely different query patterns. PostgreSQL stores structured rel
 - ChromaDB resets on Render restarts (ephemeral filesystem) — re-upload after restart
 - Groq free tier: ~30 requests/minute rate limit
 - Render free tier: ~50s cold start after inactivity
-- No authentication system (single-user mode)
+- Multi-user authentication requires Supabase Auth/provider setup and the database migration; see [account setup](docs/ACCOUNTS.md). Quotas and repeat-submission caching are not implemented yet.
 - Jupyter Notebook (`.ipynb`) not yet supported
 
 ---
 
 ## 🔮 Roadmap
 
-- [ ] pgvector for persistent vector storage
-- [ ] GitHub OAuth authentication
+- [ ] Azure backend with persistent disk for Chroma, uploads and model cache
+- [x] Supabase email/password, Google/GitHub sign-in and repository ownership (configuration and live acceptance pending)
+- [ ] Ten lifetime analyses per account and commit-aware repeat-submission caching
 - [ ] Java, Go, Rust, C++ parser support
 - [ ] Jupyter Notebook (`.ipynb`) ingestion
 - [ ] PR diff analysis — "what changed and why?"

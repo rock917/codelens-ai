@@ -72,10 +72,13 @@ async def create_repository(
     name: str,
     source_type: str,
     source_url: Optional[str] = None,
+    *,
+    owner_id: str,
 ) -> Repository:
 
     repo = Repository(
         id=generate_id(),
+        owner_id=owner_id,
         name=name,
         source_type=source_type,
         source_url=source_url,
@@ -144,9 +147,7 @@ async def process_zip_upload(
                     )
                 )
 
-                if not member_path.startswith(
-                    os.path.realpath(extract_dir)
-                ):
+                if not Path(member_path).is_relative_to(Path(extract_dir).resolve()):
                     continue
 
                 zf.extract(
@@ -306,6 +307,9 @@ async def index_directory(
             if not should_process_file(
                 relative_path
             ):
+                continue
+
+            if not Path(file_path).resolve().is_relative_to(Path(directory).resolve()):
                 continue
 
             if is_binary_file(file_path):

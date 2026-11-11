@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import { useAuth } from '../../auth/AuthProvider'
+import { supabase } from '../../auth/client'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, GitBranch, MessageSquare,
@@ -17,6 +20,18 @@ const navItems = [
 ]
 
 export default function Sidebar() {
+  const { session } = useAuth()
+  const [signingOut, setSigningOut] = useState(false)
+  const [signOutError, setSignOutError] = useState('')
+  async function signOut() {
+    if (!supabase) return
+    setSigningOut(true); setSignOutError('')
+    try {
+      const { error } = await supabase.auth.signOut({ scope: 'local' })
+      if (error) throw error
+    } catch { setSignOutError('Unable to sign out. Please try again.') }
+    finally { setSigningOut(false) }
+  }
   return (
     <aside style={{
       width: '220px', minWidth: '220px',
@@ -76,7 +91,9 @@ export default function Sidebar() {
         padding: '12px', borderTop: '1px solid var(--border)', marginTop: '16px',
       }}>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center' }}>
-          v1.0.0 · Backend <span style={{ color: 'var(--success)' }}>●</span>
+          <div style={{ overflowWrap: 'anywhere', marginBottom: 10 }}>{session?.user.email}</div>
+          <button className="btn btn-secondary" disabled={signingOut} onClick={() => void signOut()}>{signingOut ? 'Signing out…' : 'Sign out'}</button>
+          {signOutError && <p role="alert">{signOutError}</p>}
         </div>
       </div>
     </aside>

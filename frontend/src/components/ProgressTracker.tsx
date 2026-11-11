@@ -1,3 +1,4 @@
+import { getAccessToken } from '../auth/client'
 import { useEffect, useState, useRef } from 'react'
 import { getRepositoryStatus, API_BASE_URL } from '../services/api'
 import {
@@ -114,9 +115,16 @@ export default function ProgressTracker({ repoId, repoName, onReady }: Props) {
       wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
       wsUrl.pathname = `${wsUrl.pathname.replace(/\/$/, '')}/ws/progress/${repoId}`
       ws = new WebSocket(wsUrl)
-      ws.onopen = () => { if (!disposed) setConnected(true) }
+      ws.onopen = () => {
+        void getAccessToken().then(token => {
+          if (!disposed && ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'authenticate', access_token: token }))
+          }
+        }).catch(() => ws?.close())
+      }
       ws.onmessage = (e) => {
         try {
+          if (!disposed) setConnected(true)
           accept(JSON.parse(e.data))
         } catch { }
       }

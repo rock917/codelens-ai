@@ -1,3 +1,4 @@
+import { getAccessToken } from '../auth/client'
 import axios from 'axios'
 
 export const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
@@ -6,6 +7,11 @@ const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 60000,
 })
+api.interceptors.request.use(async config => {
+  config.headers.Authorization = `Bearer ${await getAccessToken()}`
+  return config
+})
+
 // ── Repository ──────────────────────────────────────────────
 export const uploadRepository = (file: File) => {
   const form = new FormData()
@@ -69,16 +75,16 @@ export const sendMessageStream = (
   onDone: () => void = () => {},
   onError: (err: string) => void = () => {}
 ) => {
-    return fetch(`${API_BASE_URL}/chat`, {
+    return getAccessToken().then(token => fetch(`${API_BASE_URL}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       repository_id: repositoryId,
       question,
       conversation_id: conversationId,
       stream: true
     })
-  }).then(async res => {
+  })).then(async res => {
     if (!res.ok) throw new Error('Stream request failed')
     const reader = res.body!.getReader()
     const decoder = new TextDecoder()

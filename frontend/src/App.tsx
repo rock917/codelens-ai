@@ -1,4 +1,6 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { AuthProvider, useAuth } from './auth/AuthProvider'
+import { Login, AuthCallback, ResetPassword, AuthFrame } from './auth/AuthPages'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Sidebar from './components/layout/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Repositories from './pages/Repositories'
@@ -9,9 +11,12 @@ import DocsGen from './pages/DocsGen'
 import Explorer from './pages/Explorer'
 import SearchPage from './pages/Search'
 
-export default function App() {
+function PrivateWorkspace() {
+  const { session, loading } = useAuth()
+  if (loading) return <AuthFrame><p role="status">Loading your workspace…</p></AuthFrame>
+  if (!session) return <Navigate to="/login" replace />
   return (
-    <BrowserRouter>
+    <div key={session.user.id}>
       <div style={{
         display: 'flex', height: '100vh',
         overflow: 'hidden', background: 'var(--bg-base)',
@@ -33,6 +38,14 @@ export default function App() {
           </Routes>
         </main>
       </div>
-    </BrowserRouter>
+    </div>
   )
+}
+export default function App() {
+  return <BrowserRouter><AuthProvider><Routes>
+    <Route path="/login" element={<Login />} />
+    <Route path="/auth/callback" element={<AuthCallback />} />
+    <Route path="/reset-password" element={<ResetPassword />} />
+    <Route path="/*" element={<PrivateWorkspace />} />
+  </Routes></AuthProvider></BrowserRouter>
 }

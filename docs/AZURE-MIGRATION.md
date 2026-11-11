@@ -65,8 +65,10 @@ This command requires secure runtime configuration first. Add a reverse proxy
 with a trusted HTTPS certificate and WebSocket/SSE support. Expose HTTPS through
 the Azure network security group; keep the raw backend port private. A domain or
 approved DNS hostname and TLS configuration still need to be chosen. The existing
-application has no authentication, so access protection must be decided before
-using it for private repositories on a public endpoint.
+account implementation requires the migration, Supabase Auth configuration and
+acceptance checks in [ACCOUNTS.md](ACCOUNTS.md) before deployment. Configure
+`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` on the backend and the corresponding
+VITE variables on Vercel. Quotas and production ingestion limits remain pending.
 
 ## Cutover and persistence checks
 
