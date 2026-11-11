@@ -5,6 +5,31 @@ Google/GitHub sign-in, and an account-owned workspace. It is a first step toward
 multi-user production use, not a completed production launch. Nothing here creates
 an Azure resource, changes live Supabase settings, or migrates vector storage.
 
+## Current launch scope (11 November 2026)
+
+Launch with Google and GitHub only. The owner has configured both providers and the
+production Site URL/redirect URLs, and reports Google OAuth is in production.
+Do not recreate providers, rotate credentials or change Google's publishing status.
+Actual provider flows are still unverified. Email/password signup and reset are
+postponed until custom SMTP is configured and tested.
+
+`VITE_ENABLE_EMAIL_AUTH` defaults to false: email signup/login/reset controls are
+hidden, and `/reset-password` redirects to sign-in. Keep it absent or `false` in
+Vercel for this release. Setting it to `true` and rebuilding enables the existing
+email forms later. This is a frontend feature switch, not a Supabase access rule:
+the Email provider remains enabled as requested, so its Auth API remains available.
+Backend token and ownership validation is unchanged.
+
+For the OAuth-only launch, email delivery is not a prerequisite for ordinary
+Google/GitHub sign-in; do not bypass confirmation checks or enable unverified-email
+options to work around account problems. Complete SMTP/password configuration below
+before opting into email authentication. The saved reset redirect can remain.
+
+Remaining launch steps: verify Vercel/Render environment settings, validate the
+migration on a database copy, back up production and schedule the migration, then
+validate the protected backend/frontend and real provider flows before releasing.
+This update does not authorize a production deployment.
+
 ## Architecture
 
 - Vercel serves React. Supabase Auth handles passwords, confirmation emails and
@@ -40,10 +65,10 @@ an Azure resource, changes live Supabase settings, or migrates vector storage.
    It does not change `auth.users`, delete repositories, or assign ownership.
    A fresh database needs the application tables created before this migration.
    Startup refuses an older schema or publicly accessible PostgreSQL application tables.
-3. In Supabase Auth enable Email, keep email confirmation enabled, and set a minimum
+3. For the later email/password release, in Supabase Auth enable Email, keep email confirmation enabled, and set a minimum
    password length of 12. The client applies this length for signup/reset; Auth must
    enforce it server-side too. Disable anonymous signup.
-4. Configure custom SMTP for confirmation/reset emails to friends. Supabase's
+4. For the later email/password release, configure custom SMTP for confirmation/reset emails to friends. Supabase's
    built-in sender is restricted to project-team addresses and is not intended for
    production. See [custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp).
    Store SMTP credentials only in Supabase's settings.
@@ -118,8 +143,9 @@ file/conversation mismatches, sockets, path containment and ingestion regression
 Frontend checks cover email/signup/OAuth/reset forms, errors, session changes,
 protected navigation and auth headers on normal requests and SSE.
 
-Before release, test real Google and GitHub callbacks, email confirmation/reset,
-expired/refreshing sessions, logout and two separate browser accounts. Verify that
+Before the OAuth-only release, test real Google and GitHub callbacks,
+expired/refreshing sessions, logout and two separate browser accounts. Test email
+confirmation/reset before later enabling `VITE_ENABLE_EMAIL_AUTH=true`. Verify that
 user B cannot access user A's IDs through HTTP or WebSocket. Attempt direct Supabase
 REST access to each application table with both anon and signed-in credentials;
 it must be denied. The SQL migration and real provider flows have not been executed

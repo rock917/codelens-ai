@@ -6,17 +6,20 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Login, AuthCallback, ResetPassword } from '../src/auth/AuthPages'
 
 const mocks = vi.hoisted(() => ({
+  features: { emailAuthEnabled: true },
   state: { session: null as unknown, loading: false },
   auth: {
     signInWithPassword: vi.fn(), signUp: vi.fn(), signInWithOAuth: vi.fn(),
     resetPasswordForEmail: vi.fn(), updateUser: vi.fn(), getSession: vi.fn(),
   },
 }))
+vi.mock('../src/auth/features', () => mocks.features)
 vi.mock('../src/auth/client', () => ({ supabase: { auth: mocks.auth } }))
 vi.mock('../src/auth/AuthProvider', () => ({ useAuth: () => mocks.state }))
 
 afterEach(cleanup)
 beforeEach(() => {
+  mocks.features.emailAuthEnabled = true
   mocks.state.session = null; mocks.state.loading = false
   for (const fn of Object.values(mocks.auth)) fn.mockReset().mockResolvedValue({ error: null })
   window.history.replaceState({}, '', '/')
@@ -84,5 +87,41 @@ describe('account forms', () => {
     await user.type(screen.getByLabelText('New password'), 'another-long-password')
     await user.click(screen.getByRole('button', { name: 'Save password' }))
     expect(mocks.auth.updateUser).toHaveBeenCalledWith({ password: 'another-long-password' })
+  })
+})
+
+describe('OAuth-only launch', () => {
+  it('shows both OAuth providers without email or recovery controls', () => {
+    mocks.features.emailAuthEnabled = false
+    show()
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Continue with GitHub' })).toBeTruthy()
+    expect(screen.queryByLabelText('Email address')).toBeNull()
+    expect(screen.queryByLabelText('Password')).toBeNull()
+    expect(screen.queryByText('Forgot password?')).toBeNull()
+    expect(screen.queryByText('New here? Create an account')).toBeNull()
+  })
+  it('prevents direct navigation to the password-reset form', async () => {
+    mocks.features.emailAuthEnabled = false
+    mocks.state.session = { user: { id: 'user-a' } }
+    render(<MemoryRouter initialEntries={['/reset-password']}><Routes>
+      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/login" element={<p>Sign-in destination</p>} />
+    </Routes></MemoryRouter>)
+    await screen.findByText('Sign-in destination')
+    expect(screen.queryByLabelText('New password')).toBeNull()
+    expect(mocks.auth.updateUser).not.toHaveBeenCalled()
+  })
+  it('does not route a stale recovery callback to the disabled password form', async () => {
+    mocks.features.emailAuthEnabled = false
+    window.history.replaceState({}, '', '/auth/callback?next=reset')
+    mocks.auth.getSession.mockResolvedValue({ data: { session: { user: { id: 'user-a' } } }, error: null })
+    render(<MemoryRouter initialEntries={['/auth/callback']}><Routes>
+      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/" element={<p>Workspace destination</p>} />
+      <Route path="/reset-password" element={<p>Recovery destination</p>} />
+    </Routes></MemoryRouter>)
+    await screen.findByText('Workspace destination')
+    expect(screen.queryByText('Recovery destination')).toBeNull()
   })
 })
