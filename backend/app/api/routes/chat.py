@@ -1,3 +1,4 @@
+from app.auth import AuthUser, get_current_user, owned_conversation, owned_repository
 import uuid
 import json
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,11 +24,12 @@ async def get_or_create_conversation(
 ) -> Conversation:
     if conversation_id:
         result = await db.execute(
-            select(Conversation).where(Conversation.id == conversation_id)
+            select(Conversation).where(Conversation.id == conversation_id, Conversation.repository_id == repository_id)
         )
         conv = result.scalar_one_or_none()
-        if conv:
-            return conv
+        if conv is None:
+            raise HTTPException(404, "Conversation not found")
+        return conv
 
     conv = Conversation(
         id=generate_id(),
@@ -57,9 +59,11 @@ async def get_conversation_history(
 @router.post("")
 async def chat(
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
     # Verify repository
+    await owned_repository(db, request.repository_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == request.repository_id)
     )
@@ -173,8 +177,10 @@ async def chat(
 @router.get("/conversations/{repository_id}")
 async def get_conversations(
     repository_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repository_id, user.id)
     result = await db.execute(
         select(Conversation)
         .where(Conversation.repository_id == repository_id)
@@ -185,8 +191,10 @@ async def get_conversations(
 @router.get("/history/{conversation_id}")
 async def get_history(
     conversation_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_conversation(db, conversation_id, user.id)
     result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conversation_id)

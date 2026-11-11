@@ -15,6 +15,9 @@ import unittest
 from unittest.mock import AsyncMock, patch
 import zipfile
 
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--real-model', action='store_true')
@@ -25,6 +28,8 @@ scratch = tempfile.TemporaryDirectory(prefix='codelens-check-')
 os.chdir(scratch.name)
 sys.path.insert(0, str(ROOT / 'backend'))
 os.environ.update(
+    SUPABASE_URL='https://auth.test',
+    SUPABASE_PUBLISHABLE_KEY='test-public-key',
     GROQ_API_KEY='test-only-no-network',
     DATABASE_URL='sqlite+aiosqlite:///./test.db',
     CHROMA_PERSIST_DIR='./vectors',
@@ -37,7 +42,8 @@ os.environ.update(
     ANONYMIZED_TELEMETRY='False',
 )
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
+from app import auth
 from sqlalchemy import select
 from app.database.base import AsyncSessionLocal, engine, init_db, recover_interrupted_jobs
 from app.models.repository import Repository
@@ -47,6 +53,19 @@ from app.services.vector_store import vector_store
 from app.services.llm.groq_provider import groq_provider
 from main import app
 from app.config.settings import settings
+
+USER_A = '11111111-1111-4111-8111-111111111111'
+USER_B = '22222222-2222-4222-8222-222222222222'
+
+
+async def fake_auth(token):
+    users = {'user-a': USER_A, 'user-b': USER_B}
+    if token == 'unavailable':
+        return Response(503)
+    if token not in users:
+        return Response(401)
+    return Response(200, json={'id': users[token], 'email': f'{token}@example.com', 'email_confirmed_at': '2026-01-01T00:00:00Z'})
+
 
 SOURCE = 'def add(a, b):\n    return a + b\n\ndef unsafe(value):\n    return eval(value)\n'
 
@@ -66,6 +85,7 @@ async def fake_stream(*args, **kwargs):
 class BackendChecks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await init_db()
+        patch.object(auth, '_fetch_user', side_effect=fake_auth).start()
         self.summary = patch.object(service, '_run_summarization_background', new=AsyncMock())
         self.summary.start()
         self.llm = patch.object(groq_provider, 'chat', new=AsyncMock(return_value='Test response'))
@@ -77,7 +97,7 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
             self.embedding.start()
             self.query = patch.object(embedding_service, 'embed_text', return_value=[1.0] + [0.0] * 383)
             self.query.start()
-        self.client = AsyncClient(transport=ASGITransport(app=app), base_url='http://test')
+        self.client = AsyncClient(transport=ASGITransport(app=app), base_url='http://test', headers={'Authorization': 'Bearer user-a'})
 
     async def asyncTearDown(self):
         await self.client.aclose()
@@ -171,9 +191,9 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
 
     async def test_restart_recovers_only_interrupted_repositories(self):
         async with AsyncSessionLocal() as db:
-            ready = await service.create_repository(db, 'finished', 'zip')
+            ready = await service.create_repository(db, 'finished', 'zip', owner_id=USER_A)
             await service.update_repository_status(db, ready.id, 'READY')
-            interrupted = await service.create_repository(db, 'interrupted', 'zip')
+            interrupted = await service.create_repository(db, 'interrupted', 'zip', owner_id=USER_A)
             await service.update_repository_status(db, interrupted.id, 'ANALYZING')
             ready_id, interrupted_id = ready.id, interrupted.id
         await recover_interrupted_jobs()
@@ -211,10 +231,136 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         def check_socket():
             with TestClient(app) as client:
                 self.assertEqual(client.get('/health').status_code, 200)
-                with client.websocket_connect(f'/ws/progress/{repo_id}') as ws:
+                with client.websocket_connect(f'/ws/progress/{repo_id}', headers={'origin': settings.FRONTEND_URL}) as ws:
+                    ws.send_json({'type': 'authenticate', 'access_token': 'user-a'})
                     self.assertEqual(ws.receive_json()['status'], 'READY')
 
         await asyncio.to_thread(check_socket)
+
+    async def test_authentication_fails_closed(self):
+        for header, expected in (('', 401), ('Basic abc', 401), ('Bearer forged', 401), ('Bearer unavailable', 503)):
+            response = await self.client.get('/repositories', headers={'Authorization': header})
+            self.assertEqual(response.status_code, expected, response.text)
+        with patch.object(settings, 'SUPABASE_PUBLISHABLE_KEY', ''):
+            self.assertEqual((await self.client.get('/account/me')).status_code, 503)
+        for payload, expected in (
+            ({'id': 'invalid', 'email': 'test@example.com'}, 401),
+            ({'id': USER_A, 'email': 'test@example.com'}, 403),
+            ({'id': USER_A, 'email': 'test@example.com', 'email_confirmed_at': 'now', 'is_anonymous': True}, 403),
+        ):
+            with patch.object(auth, '_fetch_user', new=AsyncMock(return_value=Response(200, json=payload))):
+                self.assertEqual((await self.client.get('/account/me')).status_code, expected)
+        self.assertEqual((await self.client.get('/account/me')).json()['id'], USER_A)
+
+    async def test_all_data_routes_require_auth(self):
+        from fastapi.routing import APIRoute
+        from app.auth import get_current_user
+        def guarded(dependency):
+            return dependency.call is get_current_user or any(guarded(d) for d in dependency.dependencies)
+        for route in app.routes:
+            if isinstance(route, APIRoute) and route.path not in ('/', '/health'):
+                self.assertTrue(guarded(route.dependant), route.path)
+
+    async def test_cross_account_and_legacy_isolation(self):
+        repo_id = await self.upload()
+        file_id = (await self.client.get(f'/repositories/{repo_id}/files')).json()[0]['id']
+        chat = await self.client.post('/chat', json={'repository_id': repo_id, 'question': 'Explain this'})
+        conversation_id = chat.json()['conversation_id']
+        async with AsyncSessionLocal() as db:
+            legacy = Repository(id='legacy-unowned', name='Legacy', source_type='zip', status='READY')
+            db.add(legacy)
+            await db.commit()
+        for token in ('user-a', 'user-b'):
+            self.assertEqual((await self.client.get('/repositories/legacy-unowned', headers={'Authorization': f'Bearer {token}'})).status_code, 404)
+        self.client.headers['Authorization'] = 'Bearer user-b'
+        listed = (await self.client.get('/repositories')).json()
+        self.assertNotIn(repo_id, [r['id'] for r in listed])
+        self.assertNotIn('legacy-unowned', [r['id'] for r in listed])
+        for route in (
+            f'/repositories/{repo_id}', f'/repositories/{repo_id}/status',
+            f'/repositories/{repo_id}/files', f'/repositories/{repo_id}/stats',
+            f'/repositories/{repo_id}/files/{file_id}/content',
+            f'/symbols/{repo_id}', f'/symbols/file/{file_id}',
+            f'/summary/file/{file_id}', f'/summary/repository/{repo_id}', f'/summary/files/{repo_id}',
+            f'/analysis/{repo_id}/issues', f'/analysis/{repo_id}/summary',
+            f'/chat/conversations/{repo_id}', f'/chat/history/{conversation_id}',
+            f'/generate/symbols/{repo_id}/{file_id}',
+        ):
+            result = await self.client.get(route)
+            self.assertEqual(result.status_code, 404, (route, result.text))
+        for route, payload in (
+            ('/search', {'repository_id': repo_id, 'query': 'test'}),
+            ('/chat', {'repository_id': repo_id, 'question': 'test'}),
+            ('/chat', {'repository_id': repo_id, 'question': 'test', 'stream': True}),
+            ('/generate/tests', {'repository_id': repo_id, 'file_id': file_id}),
+            ('/generate/docs', {'repository_id': repo_id, 'doc_type': 'readme'}),
+            (f'/analysis/{repo_id}', {}), (f'/repositories/{repo_id}/reindex', {}),
+        ):
+            result = await self.client.post(route, json=payload)
+            self.assertEqual(result.status_code, 404, (route, result.text))
+        self.assertEqual((await self.client.delete(f'/repositories/{repo_id}')).status_code, 404)
+        own_repo = await self.upload()
+        self.assertEqual((await self.client.get(f'/repositories/{own_repo}')).status_code, 200)
+        # Supplying an owned repo with somebody else's file or conversation must also fail.
+        for route, payload in (
+            ('/generate/tests', {'repository_id': own_repo, 'file_id': file_id}),
+            ('/chat', {'repository_id': own_repo, 'conversation_id': conversation_id, 'question': 'test'}),
+        ):
+            self.assertEqual((await self.client.post(route, json=payload)).status_code, 404)
+        self.client.headers['Authorization'] = 'Bearer user-a'
+        second_repo = await self.upload()
+        self.assertEqual((await self.client.post('/chat', json={
+            'repository_id': second_repo, 'conversation_id': conversation_id, 'question': 'test',
+        })).status_code, 404)
+        self.assertEqual((await self.client.get(f'/repositories/{repo_id}')).status_code, 200)
+
+    async def test_websocket_refuses_other_users_and_missing_auth(self):
+        from fastapi.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+        repo_id = await self.upload()
+        def check_socket():
+            with TestClient(app) as client:
+                for token, expected in (('user-b', 4404), ('forged', 4401), (None, 4401)):
+                    with client.websocket_connect(f'/ws/progress/{repo_id}', headers={'origin': settings.FRONTEND_URL}) as ws:
+                        ws.send_json({'type': 'authenticate', 'access_token': token})
+                        with self.assertRaises(WebSocketDisconnect) as exc:
+                            ws.receive_json()
+                        self.assertEqual(exc.exception.code, expected)
+                with self.assertRaises(WebSocketDisconnect) as exc:
+                    with client.websocket_connect(f'/ws/progress/{repo_id}', headers={'origin': 'https://untrusted.test'}):
+                        pass
+                self.assertEqual(exc.exception.code, 1008)
+        await asyncio.to_thread(check_socket)
+
+    async def test_ingestion_rejects_untrusted_clone_hosts(self):
+        for url in ('https://github.com.evil.test/a/b', 'file:///tmp/github.com/repo',
+                    'https://github.com@evil.test/a/b', 'http://github.com/a/b',
+                    'https://github.com:8443/a/b'):
+            response = await self.client.post('/repositories/github', json={'url': url})
+            self.assertEqual(response.status_code, 400, url)
+        with patch('app.api.routes.repository.run_github_ingestion', new=AsyncMock()) as worker:
+            response = await self.client.post('/repositories/github', json={
+                'url': 'https://github.com/example/project', 'owner_id': USER_B,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            async with AsyncSessionLocal() as db:
+                repo = await db.get(Repository, response.json()['id'])
+                self.assertEqual(repo.owner_id, USER_A)
+            worker.assert_awaited_once()
+
+    async def test_owned_file_cannot_escape_repository_directory(self):
+        from app.models.repository import File
+        repo_id = await self.upload()
+        file_id = (await self.client.get(f'/repositories/{repo_id}/files')).json()[0]['id']
+        outside = Path(scratch.name) / 'outside.py'
+        outside.write_text('private content')
+        async with AsyncSessionLocal() as db:
+            file = await db.get(File, file_id)
+            file.path = str(outside)
+            await db.commit()
+        response = await self.client.get(f'/repositories/{repo_id}/files/{file_id}/content')
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn('private content', response.text)
 
     @unittest.skipUnless(args.project_fixture, 'Enable --project-fixture to index first-party source')
     async def test_project_source_ingestion(self):

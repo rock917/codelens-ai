@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config.settings import settings
-from sqlalchemy import update
+from sqlalchemy import update, inspect, text
 
 def get_engine():
     database_url = settings.DATABASE_URL
@@ -55,6 +55,21 @@ async def init_db():
     async with engine.begin() as conn:
         from app.models import repository, conversation, summary
         await conn.run_sync(Base.metadata.create_all)
+        columns = await conn.run_sync(lambda sync: inspect(sync).get_columns('repositories'))
+        if 'owner_id' not in {column['name'] for column in columns}:
+            raise RuntimeError('Apply backend/migrations/001_private_accounts.sql before starting this release')
+        if conn.dialect.name == 'postgresql':
+            # Refuse to serve if Supabase clients could bypass API ownership checks.
+            for table_name in Base.metadata.tables:
+                safe = await conn.scalar(text("""
+                    SELECT c.relrowsecurity
+                      AND NOT has_table_privilege('anon', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                      AND NOT has_table_privilege('authenticated', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = :name
+                """), {'name': table_name})
+                if not safe:
+                    raise RuntimeError('Apply backend/migrations/001_private_accounts.sql: app tables must be private')
     print("✅ Database initialized")
 
 

@@ -1,3 +1,4 @@
+from app.auth import AuthUser, get_current_user, owned_repository
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -12,8 +13,10 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 async def trigger_analysis(
     repo_id: str,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )
@@ -32,8 +35,10 @@ async def get_issues(
     repo_id: str,
     severity: Optional[str] = None,
     issue_type: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     query = (
         select(AnalysisIssue, File.path)
         .join(File, AnalysisIssue.file_id == File.id)
@@ -70,8 +75,10 @@ async def get_issues(
 @router.get("/{repo_id}/summary")
 async def get_analysis_summary(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )

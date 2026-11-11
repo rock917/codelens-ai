@@ -5,7 +5,7 @@ from app.database.base import init_db, recover_interrupted_jobs, engine
 from app.config.settings import settings
 from app.api.routes import (
     repository, symbols, search,
-    chat, summary, analysis, generation
+    chat, summary, analysis, generation, account
 )
 from app.api.routes.websocket import router as ws_router
 import os
@@ -38,6 +38,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def private_response_cache_policy(request, call_next):
+    response = await call_next(request)
+    if request.url.path not in ('/', '/health', '/docs', '/redoc', '/openapi.json'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 # Routes
 app.include_router(repository.router)
 app.include_router(symbols.router)
@@ -47,6 +55,7 @@ app.include_router(summary.router)
 app.include_router(analysis.router)
 app.include_router(generation.router)
 app.include_router(ws_router)
+app.include_router(account.router)
 
 @app.get("/")
 async def root():

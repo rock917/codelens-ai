@@ -1,3 +1,4 @@
+from app.auth import AuthUser, get_current_user, owned_file, owned_repository
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -28,8 +29,10 @@ class SymbolResponse(BaseModel):
 async def get_symbols(
     repo_id: str,
     symbol_type: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     query = (
         select(Symbol, File.path)
         .join(File, Symbol.file_id == File.id)
@@ -62,8 +65,10 @@ async def get_symbols(
 @router.get("/file/{file_id}")
 async def get_file_symbols(
     file_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_file(db, file_id, user.id)
     result = await db.execute(
         select(Symbol).where(Symbol.file_id == file_id)
         .order_by(Symbol.start_line)

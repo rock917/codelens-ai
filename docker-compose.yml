@@ -13,6 +13,8 @@ services:
       - DEBUG=False
       - DATABASE_URL=sqlite+aiosqlite:////app/data/codelens.db
       - CHROMA_PERSIST_DIR=./chroma_db
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
       - EMBEDDING_MODEL=all-MiniLM-L6-v2
@@ -34,6 +36,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${SUPABASE_URL}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY}
     container_name: codelens-frontend
     ports:
       - "3000:80"

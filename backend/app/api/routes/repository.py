@@ -1,4 +1,7 @@
+from app.auth import AuthUser, get_current_user, owned_file, owned_repository
 import os
+from pathlib import Path
+from urllib.parse import urlsplit
 import uuid
 import json
 
@@ -29,7 +32,8 @@ router = APIRouter(prefix="/repositories", tags=["repositories"])
 async def upload_zip(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
     # Validate file
     if not file.filename.endswith(".zip"):
@@ -57,7 +61,7 @@ async def upload_zip(
 
     # Create repo record
     name = file.filename.replace(".zip", "")
-    repo = await create_repository(db, name, "zip")
+    repo = await create_repository(db, name, "zip", owner_id=user.id)
 
     # Process in background
     background_tasks.add_task(
@@ -78,18 +82,29 @@ async def upload_zip(
 async def ingest_github(
     request: GithubIngestRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
     url = request.url.strip()
 
-    if not ("github.com" in url or "gitlab.com" in url):
+    try:
+        parsed_url = urlsplit(url)
+        valid_url = (
+            parsed_url.scheme == 'https' and parsed_url.hostname in ('github.com', 'gitlab.com')
+            and not parsed_url.username and not parsed_url.password
+            and parsed_url.port in (None, 443) and not parsed_url.query and not parsed_url.fragment
+            and len(parsed_url.path.strip('/').split('/')) >= 2
+        )
+    except ValueError:
+        valid_url = False
+    if not valid_url:
         raise HTTPException(
             400,
-            "Only GitHub/GitLab URLs are supported"
+            "Only HTTPS GitHub/GitLab repository URLs are supported"
         )
 
     name = request.name or url.rstrip("/").split("/")[-1]
-    repo = await create_repository(db, name, "github", url)
+    repo = await create_repository(db, name, "github", url, owner_id=user.id)
 
     background_tasks.add_task(
         run_github_ingestion,
@@ -107,10 +122,11 @@ async def ingest_github(
 
 @router.get("", response_model=list[RepositoryResponse])
 async def list_repositories(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Repository).order_by(Repository.created_at.desc())
+        select(Repository).where(Repository.owner_id == user.id).order_by(Repository.created_at.desc())
     )
 
     return result.scalars().all()
@@ -119,8 +135,10 @@ async def list_repositories(
 @router.get("/{repo_id}", response_model=RepositoryResponse)
 async def get_repository(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )
@@ -136,8 +154,10 @@ async def get_repository(
 @router.get("/{repo_id}/status")
 async def get_status(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )
@@ -160,8 +180,10 @@ async def get_status(
 @router.get("/{repo_id}/files", response_model=list[FileResponse])
 async def get_files(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(FileModel)
         .where(FileModel.repository_id == repo_id)
@@ -174,8 +196,10 @@ async def get_files(
 @router.get("/{repo_id}/stats", response_model=RepositoryStatsResponse)
 async def get_stats(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )
@@ -235,8 +259,10 @@ async def get_stats(
 @router.delete("/{repo_id}")
 async def delete_repository(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )
@@ -258,8 +284,10 @@ async def delete_repository(
 async def reindex_repository(
     repo_id: str,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )
@@ -304,8 +332,10 @@ async def reindex_repository(
 async def get_file_content(
     repo_id: str,
     file_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_file(db, file_id, user.id, repo_id)
     result = await db.execute(
         select(FileModel).where(
             FileModel.id == file_id,
@@ -328,6 +358,9 @@ async def get_file_content(
 
     if not os.path.exists(file_path):
         raise HTTPException(404, "File content not found on disk")
+
+    if not Path(file_path).resolve().is_relative_to(Path(repo_dir).resolve()):
+        raise HTTPException(404, "File content not found")
 
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:

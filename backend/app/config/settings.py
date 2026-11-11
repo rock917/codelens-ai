@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-in-production"
     USE_GPU: bool = False
 
+    # Supabase Auth uses a public publishable (or legacy anon) key, never a service key.
+    SUPABASE_URL: str = ""
+    SUPABASE_PUBLISHABLE_KEY: str = ""
+
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./codelens.db"
 

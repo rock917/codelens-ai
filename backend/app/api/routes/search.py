@@ -1,3 +1,4 @@
+from app.auth import AuthUser, get_current_user, owned_repository
 from fastapi import APIRouter, Depends, HTTPException
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,9 +31,11 @@ class SearchResult(BaseModel):
 @router.post("")
 async def search_code(
     request: SearchRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
     # Check repo exists
+    await owned_repository(db, request.repository_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == request.repository_id)
     )

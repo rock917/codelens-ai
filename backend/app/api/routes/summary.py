@@ -1,3 +1,4 @@
+from app.auth import AuthUser, get_current_user, owned_file, owned_repository
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +16,10 @@ router = APIRouter(prefix="/summary", tags=["summary"])
 @router.get("/file/{file_id}")
 async def get_file_summary(
     file_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_file(db, file_id, user.id)
     result = await db.execute(
         select(File).where(File.id == file_id)
     )
@@ -39,8 +42,10 @@ async def get_file_summary(
 @router.get("/repository/{repo_id}")
 async def get_repository_summary(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id)
     )
@@ -105,8 +110,10 @@ async def get_repository_summary(
 @router.get("/files/{repo_id}")
 async def get_all_file_summaries(
     repo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
+    await owned_repository(db, repo_id, user.id)
     result = await db.execute(
         select(File)
         .where(File.repository_id == repo_id)
