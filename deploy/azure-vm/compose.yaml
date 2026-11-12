@@ -6,6 +6,9 @@ services:
     build:
       context: ../../backend
     restart: unless-stopped
+    env_file:
+      - path: /etc/codelens/account-admin.env
+        required: false
     ports:
       - "127.0.0.1:8000:8000"
     environment:

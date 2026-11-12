@@ -31,7 +31,7 @@ def main():
         command = ['docker', 'compose', '--env-file', str(empty_env),
                    '-f', str(ROOT / 'deploy/azure-vm/compose.yaml'),
                    '-f', str(ROOT / 'deploy/azure-vm/compose.https.yaml')]
-        result = subprocess.run(command + ['config', '--format', 'json'], cwd=directory,
+        result = subprocess.run(command + ['config', '--no-env-resolution', '--format', 'json'], cwd=directory,
                                 env=environment, capture_output=True, text=True)
         if result.returncode:
             raise SystemExit('Compose validation failed. Check the Docker Compose installation and configuration.')

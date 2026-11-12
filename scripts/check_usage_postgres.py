@@ -14,7 +14,7 @@ os.environ.update(DATABASE_URL='postgresql+asyncpg://postgres@127.0.0.1/codelens
 from fastapi import HTTPException
 from sqlalchemy import select, func, delete
 from app.database.base import engine, Base, AsyncSessionLocal, init_db
-from app.models import repository, conversation, summary, usage
+from app.models import repository, conversation, summary, usage, deletion
 from app.models.repository import Repository
 from app.models.usage import AnalysisAdmission
 from app.services.admission_service import admit, usage as allowance
@@ -49,6 +49,8 @@ async def main():
     await migration('001_private_accounts.sql')
     await migration('002_analysis_usage.sql')
     await migration('002_analysis_usage.sql')
+    await migration('003_account_deletion.sql')
+    await migration('003_account_deletion.sql')
     await init_db()  # Checks RLS and anonymous/authenticated grants on every table.
     async with AsyncSessionLocal() as db:
         assert await db.scalar(select(func.count()).select_from(AnalysisAdmission)) == 3

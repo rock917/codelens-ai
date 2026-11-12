@@ -5,7 +5,7 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, GitBranch, MessageSquare,
   Shield, FlaskConical, FileText,
-  Zap, FolderTree, Search
+  Zap, FolderTree, Search, Settings
 } from 'lucide-react'
 
 const navItems = [
@@ -17,6 +17,7 @@ const navItems = [
   { to: '/analysis', icon: Shield, label: 'Analysis' },
   { to: '/tests', icon: FlaskConical, label: 'Test Gen' },
   { to: '/docs', icon: FileText, label: 'Docs Gen' },
+  { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
 export default function Sidebar() {

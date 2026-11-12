@@ -86,6 +86,8 @@ async def fake_stream(*args, **kwargs):
 
 class BackendChecks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        from app.services.account_deletion import recently_deleted
+        recently_deleted.clear()
         await init_db()
         # Each test gets its own empty schema; quota/cache tests must not share history.
         from app.database.base import Base
@@ -115,6 +117,144 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/repositories/upload', files={'file': ('sample.zip', archive() + uuid.uuid4().hex.encode(), 'application/zip')})
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()['id']
+
+    def enable_deletion(self):
+        import time
+        from pydantic import SecretStr
+        patch.object(settings, 'SUPABASE_SERVICE_ROLE_KEY', SecretStr('test-admin-not-a-secret')).start()
+        patch.object(auth, 'verified_sign_in_time', return_value=time.time()).start()
+
+    async def test_account_deletion_requires_fresh_auth_and_exact_confirmation(self):
+        from app.services import account_deletion as deletion
+        body = {'email': 'user-a@example.com', 'confirmation': 'DELETE'}
+        repo = await self.upload()
+        self.assertEqual((await self.client.delete('/account/deletion')).status_code, 422)
+        self.assertEqual((await self.client.request('DELETE', '/account/deletion', json=body)).status_code, 403)
+        self.enable_deletion()
+        with patch.object(deletion, 'delete_identity', new=AsyncMock()) as remove:
+            for payload in ({**body, 'email': 'user-b@example.com'}, {**body, 'confirmation': 'delete'}):
+                self.assertEqual((await self.client.request('DELETE', '/account/deletion', json=payload)).status_code, 400)
+            self.assertEqual((await self.client.request('DELETE', '/account/deletion', json={**body, 'owner_id': USER_B})).status_code, 422)
+            remove.assert_not_called()
+        self.assertEqual((await self.client.get(f'/repositories/{repo}')).status_code, 200)
+
+    async def test_deleted_account_cleans_sql_vectors_files_and_old_deleted_repositories(self):
+        from app.services import account_deletion as deletion
+        from app.models.deletion import AccountDeletion
+        from app.models.usage import AnalysisAdmission, AccountUsage
+        from app.models.conversation import Conversation, Message
+        from sqlalchemy import func
+        a = await self.upload()
+        old = await self.upload()
+        self.assertEqual((await self.client.delete(f'/repositories/{old}')).status_code, 200)
+        self.assertTrue(Path(settings.UPLOAD_DIR, old).exists())
+        await self.client.post('/chat', json={'repository_id': a, 'question': 'Explain this', 'stream': False})
+        await self.client.post(f'/analysis/{a}')
+        self.client.headers['Authorization'] = 'Bearer user-b'
+        b = await self.upload()
+        self.client.headers['Authorization'] = 'Bearer user-a'
+        self.enable_deletion()
+        with patch.object(deletion, 'delete_identity', new=AsyncMock()) as remove:
+            response = await self.client.request('DELETE', '/account/deletion', json={'email': 'user-a@example.com', 'confirmation': 'DELETE'})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['status'], 'deleted')
+            remove.assert_awaited_once_with(USER_A)
+        # Even an Auth response fetched just before deletion cannot reopen access.
+        self.assertEqual((await self.client.get('/repositories')).status_code, 401)
+        self.assertFalse(Path(settings.UPLOAD_DIR, a).exists())
+        self.assertFalse(Path(settings.UPLOAD_DIR, old).exists())
+        names = [collection.name for collection in vector_store.get_client().list_collections()]
+        self.assertNotIn('repo_' + a.replace('-', '_'), names)
+        self.assertNotIn('repo_' + old.replace('-', '_'), names)
+        self.assertIn('repo_' + b.replace('-', '_'), names)
+        async with AsyncSessionLocal() as db:
+            self.assertIsNone(await db.get(Repository, a))
+            self.assertIsNone(await db.get(AccountUsage, USER_A))
+            self.assertIsNone(await db.get(AccountDeletion, USER_A))
+            self.assertEqual(await db.scalar(select(func.count()).select_from(AnalysisAdmission).where(AnalysisAdmission.owner_id == USER_A)), 0)
+            self.assertEqual(await db.scalar(select(func.count()).select_from(Conversation)), 0)
+            self.assertEqual(await db.scalar(select(func.count()).select_from(Message)), 0)
+            self.assertIsNotNone(await db.get(Repository, b))
+        self.client.headers['Authorization'] = 'Bearer user-b'
+        self.assertEqual((await self.client.get(f'/repositories/{b}')).status_code, 200)
+
+    async def test_deletion_failures_stay_blocked_and_retry_after_restart(self):
+        from app.services import account_deletion as deletion
+        from app.models.deletion import AccountDeletion
+        repo = await self.upload()
+        self.enable_deletion()
+        body = {'email': 'user-a@example.com', 'confirmation': 'DELETE'}
+        with patch.object(deletion, 'erase_storage', side_effect=OSError('fixture failure')), patch.object(deletion, 'delete_identity', new=AsyncMock()) as remove:
+            response = await self.client.request('DELETE', '/account/deletion', json=body)
+            self.assertEqual(response.status_code, 202, response.text)
+            remove.assert_not_called()
+        self.assertEqual((await self.client.get('/repositories')).status_code, 409)
+        self.assertTrue((await self.client.get('/account/deletion')).json()['pending'])
+        async with AsyncSessionLocal() as db:
+            self.assertEqual((await db.get(AccountDeletion, USER_A)).phase, 'DATA')
+        await engine.dispose()
+        with patch.object(deletion, 'delete_identity', new=AsyncMock(side_effect=RuntimeError('offline'))):
+            self.assertFalse(await deletion.start_deletion(USER_A))
+        async with AsyncSessionLocal() as db:
+            self.assertIsNone(await db.get(Repository, repo))
+            self.assertEqual((await db.get(AccountDeletion, USER_A)).phase, 'AUTH')
+        with patch.object(deletion, 'delete_identity', new=AsyncMock()) as remove:
+            self.assertTrue(await deletion.start_deletion(USER_A))
+            remove.assert_awaited_once_with(USER_A)
+
+    async def test_deletion_refuses_active_work_and_missing_admin_configuration(self):
+        from app.services import account_deletion as deletion
+        from pydantic import SecretStr
+        self.enable_deletion()
+        body = {'email': 'user-a@example.com', 'confirmation': 'DELETE'}
+        async with deletion.account_work(USER_A):
+            response = await self.client.request('DELETE', '/account/deletion', json=body)
+            self.assertEqual(response.status_code, 409, response.text)
+        with patch.object(settings, 'SUPABASE_SERVICE_ROLE_KEY', SecretStr('')):
+            self.assertFalse((await self.client.get('/account/deletion')).json()['enabled'])
+            self.assertEqual((await self.client.request('DELETE', '/account/deletion', json=body)).status_code, 503)
+        self.assertEqual(dict(deletion.active), {})
+
+    async def test_token_refresh_does_not_count_as_fresh_sign_in(self):
+        import base64, json, time
+        now = time.time()
+        def token(amr, sub=USER_A):
+            claims = {'sub': sub, 'iat': now, 'amr': amr}
+            return 'header.' + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('=') + '.signature'
+        self.assertEqual(auth.verified_sign_in_time(token([{'method': 'token_refresh', 'timestamp': now}]), USER_A), 0)
+        self.assertEqual(auth.verified_sign_in_time(token([{'method': 'oauth', 'timestamp': now}], USER_B), USER_A), 0)
+        self.assertEqual(auth.verified_sign_in_time(token([{'method': 'password', 'timestamp': now - 700}]), USER_A), now - 700)
+        self.assertEqual(auth.verified_sign_in_time(token([{'method': 'oauth', 'timestamp': now}]), USER_A), now)
+
+    async def test_streaming_reply_holds_account_lease_until_finished(self):
+        repo = await self.upload()
+        self.enable_deletion()
+        started, finish = asyncio.Event(), asyncio.Event()
+        async def waiting_stream(*args, **kwargs):
+            started.set()
+            yield 'First part'
+            await finish.wait()
+            yield 'Last part'
+        with patch.object(groq_provider, 'stream', new=waiting_stream):
+            task = asyncio.create_task(self.client.post('/chat', json={'repository_id': repo, 'question': 'Explain', 'stream': True}))
+            try:
+                await asyncio.wait_for(started.wait(), 10)
+                response = await self.client.request('DELETE', '/account/deletion', json={'email': 'user-a@example.com', 'confirmation': 'DELETE'})
+                self.assertEqual(response.status_code, 409, response.text)
+            finally:
+                finish.set()
+                await task
+
+    async def test_identity_delete_retries_failures_and_only_targets_verified_id(self):
+        from app.services.account_deletion import delete_identity
+        self.enable_deletion()
+        with patch('httpx.AsyncClient.request', new=AsyncMock(return_value=Response(200))) as request:
+            await delete_identity(USER_A)
+            self.assertEqual(request.call_args.args, ('DELETE', 'https://auth.test/auth/v1/admin/users/' + USER_A))
+            self.assertEqual(request.call_args.kwargs['json'], {'should_soft_delete': False})
+        with patch('httpx.AsyncClient.request', new=AsyncMock(return_value=Response(503))):
+            with self.assertRaises(RuntimeError):
+                await delete_identity(USER_A)
 
     async def test_api_workflow(self):
         self.assertEqual((await self.client.get('/health')).status_code, 200)

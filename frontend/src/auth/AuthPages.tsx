@@ -84,6 +84,8 @@ export function Login() {
   }
   function changeMode(next: typeof mode) { setMode(next); setPassword(''); setError(''); setNotice('') }
   return <AuthFrame showcase>
+    {new URLSearchParams(window.location.search).get('deleted') === '1' && <p role="status">Your CodeLens account has been deleted.</p>}
+    {new URLSearchParams(window.location.search).get('deletion') === 'pending' && <p role="status">Your deletion request was received. Cleanup continues on the server. Contact support if you need help checking completion.</p>}
     <div className="auth-card-eyebrow">YOUR NEXT CHAPTER STARTS HERE</div>
     <h2>{mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : 'Welcome to CodeLens'}</h2>
     <p className="auth-subtitle">Your repositories, insights, and conversations in one private workspace.</p>

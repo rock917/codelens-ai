@@ -10,6 +10,7 @@ import TestGen from './pages/TestGen'
 import DocsGen from './pages/DocsGen'
 import Explorer from './pages/Explorer'
 import SearchPage from './pages/Search'
+import Settings from './pages/Settings'
 
 function PrivateWorkspace() {
   const { session, loading } = useAuth()
@@ -35,6 +36,7 @@ function PrivateWorkspace() {
             <Route path="/analysis" element={<Analysis />} />
             <Route path="/tests" element={<TestGen />} />
             <Route path="/docs" element={<DocsGen />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
       </div>

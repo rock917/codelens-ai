@@ -5,6 +5,9 @@ No service-role key or OAuth provider secret is needed here.
 """
 from dataclasses import dataclass
 from uuid import UUID
+import base64
+import json
+import time
 
 import httpx
 from fastapi import Depends, HTTPException, Request
@@ -23,6 +26,24 @@ bearer = HTTPBearer(auto_error=False)
 class AuthUser:
     id: str
     email: str
+    signed_in_at: float = 0
+
+
+def verified_sign_in_time(token, user_id):
+    # Called ONLY after Supabase validates this exact token. Never use iat: refresh
+    # issues a new JWT without requiring the user to sign in again.
+    try:
+        payload = token.split('.')[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+        if claims.get('sub') != user_id:
+            return 0
+        timestamps = [entry['timestamp'] for entry in claims.get('amr', [])
+                      if entry.get('method') in ('password', 'oauth')
+                      and type(entry.get('timestamp')) in (int, float)
+                      and 0 < entry['timestamp'] <= time.time() + 30]
+        return max(timestamps, default=0)
+    except (ValueError, KeyError, TypeError, IndexError, AttributeError):
+        return 0
 
 
 async def _fetch_user(token: str) -> httpx.Response:
@@ -56,7 +77,7 @@ async def authenticate_token(token: str) -> AuthUser:
         raise HTTPException(401, 'Invalid account') from None
     if data.get('is_anonymous') or not data.get('email_confirmed_at'):
         raise HTTPException(403, 'Please confirm your email before continuing')
-    return AuthUser(id=user_id, email=email)
+    return AuthUser(id=user_id, email=email, signed_in_at=verified_sign_in_time(token, user_id))
 
 
 async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> AuthUser:
@@ -65,7 +86,9 @@ async def get_current_user(request: Request, credentials: HTTPAuthorizationCrede
     user = await authenticate_token(credentials.credentials)
     from app.guards import check_account
     check_account(user.id, request.method, request.url.path)
-    return user
+    from app.services.account_deletion import account_work
+    async with account_work(user.id, allow_deleting=request.url.path == '/account/deletion'):
+        yield user
 
 
 async def owned_repository(db: AsyncSession, repo_id: str, user_id: str) -> Repository:

@@ -53,7 +53,7 @@ async def get_db():
 
 async def init_db():
     async with engine.begin() as conn:
-        from app.models import repository, conversation, summary, usage
+        from app.models import repository, conversation, summary, usage, deletion
         await conn.run_sync(Base.metadata.create_all)
         columns = await conn.run_sync(lambda sync: inspect(sync).get_columns('repositories'))
         if 'owner_id' not in {column['name'] for column in columns}:

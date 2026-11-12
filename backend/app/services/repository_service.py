@@ -592,11 +592,13 @@ async def _run_summarization_background(repo_id: str):
         import asyncio
         from app.database.base import AsyncSessionLocal
         from app.services.summarization_service import run_selective_summarization
+        from app.services.account_deletion import account_work
         async with AsyncSessionLocal() as db:
-            await asyncio.wait_for(
-                run_selective_summarization(db, repo_id),
-                timeout=300.0
-            )
+            repo = await db.get(Repository, repo_id)
+            if repo is None or not repo.owner_id:
+                return
+            async with account_work(repo.owner_id):
+                await asyncio.wait_for(run_selective_summarization(db, repo_id), timeout=300.0)
         print(f"✅ Background summarization complete for {repo_id}")
     except asyncio.TimeoutError:
         print(f"⚠️ Summarization timed out for {repo_id}")

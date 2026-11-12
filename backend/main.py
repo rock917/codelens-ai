@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from app.guards import RequestGuards
 from sqlalchemy import text
 import asyncio
+from contextlib import suppress
 from app.database.base import init_db, recover_interrupted_jobs, engine
 from app.config.settings import settings
 from app.api.routes import (
@@ -21,9 +22,16 @@ async def lifespan(app: FastAPI):
     await init_db()
     if settings.RECOVER_INTERRUPTED_JOBS:
         await recover_interrupted_jobs()
+    from app.services.account_deletion import retry_deletions
+    deletion_task = asyncio.create_task(retry_deletions())
     print("✅ CodeLens AI is ready!")
-    yield
-    await engine.dispose()
+    try:
+        yield
+    finally:
+        deletion_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await deletion_task
+        await engine.dispose()
     print("👋 Shutting down CodeLens AI...")
 
 app = FastAPI(

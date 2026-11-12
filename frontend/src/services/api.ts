@@ -13,6 +13,10 @@ api.interceptors.request.use(async config => {
 })
 
 // ── Repository ──────────────────────────────────────────────
+export const getDeletionStatus = () => api.get('/account/deletion')
+export const deleteAccount = (email: string, confirmation: string) =>
+  api.delete('/account/deletion', { data: { email, confirmation } })
+
 export const uploadRepository = (file: File) => {
   const form = new FormData()
   form.append('file', file)

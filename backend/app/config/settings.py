@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 from pydantic import Field
+from pydantic import SecretStr
 
 class Settings(BaseSettings):
     # App
@@ -13,6 +14,8 @@ class Settings(BaseSettings):
     # Supabase Auth uses a public publishable (or legacy anon) key, never a service key.
     SUPABASE_URL: str = ""
     SUPABASE_PUBLISHABLE_KEY: str = ""
+    # Optional server-only credential. Never expose through frontend configuration.
+    SUPABASE_SERVICE_ROLE_KEY: SecretStr = SecretStr('')
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./codelens.db"
