@@ -18,7 +18,7 @@ afterEach(() => { cleanup(); mock.session = null; window.history.replaceState({}
 it('redirects a direct dashboard URL to login before rendering private content', () => {
   window.history.replaceState({}, '', '/repositories')
   render(<App />)
-  expect(screen.getByRole('heading', { name: 'Welcome back' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Welcome to CodeLens' })).toBeTruthy()
   expect(screen.queryByText('Private navigation')).toBeNull()
   expect(window.location.pathname).toBe('/login')
 })
@@ -33,5 +33,5 @@ it('remounts private content on account change and removes it on logout', () => 
   expect(screen.queryByText('Selected private repository')).toBeNull()
   mock.session = null; view.rerender(<App />)
   expect(screen.queryByText('Private navigation')).toBeNull()
-  expect(screen.getByRole('heading', { name: 'Welcome back' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Welcome to CodeLens' })).toBeTruthy()
 })

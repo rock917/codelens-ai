@@ -48,7 +48,8 @@ function IssueTypeTag({ type }: { type: string }) {
   )
 }
 
-function HealthRing({ score }: { score: number }) {
+function HealthRing({ score }: { score: number | null }) {
+  if (score == null) return <div style={{ width: 100, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>Not scored</div>
   const color = score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444'
   const radius = 40
   const circumference = 2 * Math.PI * radius
@@ -110,55 +111,56 @@ export default function Analysis() {
   const [summary, setSummary] = useState<AnalysisSummary | null>(null)
   const [loading, setLoading] = useState(false)
   const [running, setRunning] = useState(false)
+  const [error, setError] = useState('')
+  const [refresh, setRefresh] = useState(0)
   const [severityFilter, setSeverityFilter] = useState<string>('ALL')
   const [expandedIssue, setExpandedIssue] = useState<string | null>(null)
 
-  useEffect(() => { loadRepos() }, [])
-
-  async function loadRepos() {
-    try {
-      const res = await getRepositories()
+  useEffect(() => {
+    let active = true
+    void getRepositories().then(res => {
+      if (!active) return
       const ready = res.data.filter((r: Repository) => r.status === 'READY')
       setRepos(ready)
-      if (ready.length > 0) {
-        await selectRepo(ready[0])
-      }
-    } catch (err) {
-      console.error(err)
-    }
-  }
+      setSelectedRepo(ready[0] ?? null)
+    }).catch(() => { if (active) setError('Unable to load repositories. Refresh the page to retry.') })
+    return () => { active = false }
+  }, [])
 
-  async function selectRepo(repo: Repository) {
-    setSelectedRepo(repo)
-    setLoading(true)
-    setIssues([])
-    setSummary(null)
-    try {
-      const [issuesRes, summaryRes] = await Promise.all([
-        getIssues(repo.id),
-        getAnalysisSummary(repo.id)
-      ])
-      setIssues(issuesRes.data)
-      setSummary(summaryRes.data)
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setLoading(false)
+  const repoId = selectedRepo?.id
+  useEffect(() => {
+    if (!repoId) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    setLoading(true); setIssues([]); setSummary(null); setError(''); setRunning(false)
+    async function poll() {
+      try {
+        const { data } = await getAnalysisSummary(repoId!)
+        if (!active) return
+        const scanning = ['PENDING', 'RUNNING'].includes(data.analysis_status)
+        setSummary(data); setRunning(scanning); setError(data.error_message || '')
+        const results = await getIssues(repoId!)
+        if (!active) return
+        setIssues(results.data); setLoading(false)
+        if (scanning) timer = setTimeout(() => void poll(), 2000)
+      } catch {
+        if (active) { setError('Unable to refresh scan results. Try refreshing the results.'); setLoading(false); setRunning(false) }
+      }
     }
-  }
+    void poll()
+    return () => { active = false; clearTimeout(timer) }
+  }, [repoId, refresh])
+
+  function selectRepo(repo: Repository) { setSelectedRepo(repo) }
 
   async function handleRunAnalysis() {
-    if (!selectedRepo) return
-    setRunning(true)
+    if (!selectedRepo || running) return
+    setRunning(true); setError('')
     try {
       await triggerAnalysis(selectedRepo.id)
-      // Wait a moment then reload
-      setTimeout(async () => {
-        await selectRepo(selectedRepo)
-        setRunning(false)
-      }, 3000)
-    } catch (err) {
-      console.error(err)
+      setRefresh(value => value + 1)
+    } catch {
+      setError('Unable to start analysis. Refresh the results and try again.')
       setRunning(false)
     }
   }
@@ -302,7 +304,7 @@ export default function Analysis() {
                 <button
                   className="btn-primary"
                   onClick={handleRunAnalysis}
-                  disabled={running}
+                  disabled={running || loading}
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   {running
@@ -312,6 +314,19 @@ export default function Analysis() {
                 </button>
               </div>
 
+              {error && <div role="alert" style={{ padding: '12px 24px', color: '#fca5a5' }}>{error} <button className="btn-secondary" onClick={() => setRefresh(v => v + 1)}>Refresh results</button></div>}
+              {summary && <div role="status" style={{ padding: '12px 24px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7 }}>
+                {running ? 'Analysis is running. Displayed findings are from the last completed scan.' :
+                  summary.analysis_status === 'NOT_RUN' ? 'Not analyzed yet. Run a scan to calculate health.' :
+                  summary.analysis_status === 'LEGACY' ? 'These findings are from an earlier scan. Run analysis again to calculate the updated score and coverage.' :
+                  summary.coverage ? `${summary.coverage.scanned_files} files scanned · ${summary.coverage.scanned_loc.toLocaleString()} lines · ${summary.coverage.unsupported_files} unsupported files excluded.` : 'No completed scan available.'}
+                {summary.coverage?.scanned_files === 0 && <div>No supported source files. Scanning supports Python, JavaScript and TypeScript.</div>}
+                {summary.health_score != null && <details><summary style={{ cursor: 'pointer' }}>How is health calculated?</summary>
+                  Severity-weighted findings per 1,000 scanned lines (minimum 1,000): critical ×15, high ×8, medium ×3, low ×1.
+                  Score = 100 / (1 + density / 20), rounded. Critical findings cap the score at 49; high findings at 79.
+                  This heuristic helps prioritize review. Findings can be false positives; a high score does not guarantee secure code.
+                </details>}
+              </div>}
               {/* Severity filter */}
               <div style={{
                 padding: '12px 24px',
@@ -365,10 +380,11 @@ export default function Analysis() {
                     alignItems: 'center', justifyContent: 'center',
                     padding: '60px', textAlign: 'center'
                   }}>
-                    <CheckCircle size={40} color="var(--success)"
-                      style={{ marginBottom: '12px' }} />
+                    {summary?.health_score != null && !running && !error
+                      ? <CheckCircle size={40} color="var(--success)" style={{ marginBottom: 12 }} />
+                      : <Shield size={40} color="var(--text-muted)" style={{ marginBottom: 12 }} />}
                     <h3 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '6px' }}>
-                      {issues.length === 0 ? 'No issues found yet' : 'No issues at this severity'}
+                      {running ? 'Scan in progress' : summary?.health_score == null ? 'Run analysis to see your results' : issues.length === 0 ? 'No findings in scanned files' : 'No issues at this severity'}
                     </h3>
                     <p style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                       {issues.length === 0
@@ -378,7 +394,7 @@ export default function Analysis() {
                     {issues.length === 0 && (
                       <button className="btn-primary"
                         style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}
-                        onClick={handleRunAnalysis}>
+                        disabled={running || loading} onClick={handleRunAnalysis}>
                         <Zap size={13} /> Run Analysis
                       </button>
                     )}

@@ -56,7 +56,8 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function HealthBar({ score }: { score: number }) {
+function HealthBar({ score }: { score: number | null }) {
+  if (score == null) return <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>Run analysis</span>
   const color = score >= 80 ? 'var(--success)' : score >= 50 ? 'var(--warning)' : 'var(--danger)'
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

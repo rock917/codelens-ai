@@ -147,6 +147,76 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(vector_store.get_chunk_count(repo_id), status['total_chunks'])
 
+    async def test_analysis_lifecycle_and_atomic_rescan(self):
+        repo_id = await self.upload()
+        path = f'/analysis/{repo_id}'
+        initial = (await self.client.get(path + '/summary')).json()
+        self.assertEqual(initial['analysis_status'], 'NOT_RUN')
+        self.assertIsNone(initial['health_score'])
+        await self.client.post(path)
+        scanned = (await self.client.get(path + '/summary')).json()
+        self.assertEqual(scanned['analysis_status'], 'COMPLETED')
+        self.assertEqual(scanned['coverage']['scanned_files'], 2)
+        self.assertLessEqual(scanned['health_score'], 49)  # eval finding
+        original = (await self.client.get(path + '/issues')).json()
+        await self.client.post(path)
+        self.assertEqual(len((await self.client.get(path + '/issues')).json()), len(original))
+        with patch('app.services.analyzer.analysis_engine._scan_files', side_effect=OSError('Missing file')):
+            await self.client.post(path)
+        failed = (await self.client.get(path + '/summary')).json()
+        self.assertEqual(failed['analysis_status'], 'FAILED')
+        self.assertEqual(failed['health_score'], scanned['health_score'])
+        self.assertEqual(len((await self.client.get(path + '/issues')).json()), len(original))
+        await self.client.post(path)
+        self.assertEqual((await self.client.get(path + '/summary')).json()['analysis_status'], 'COMPLETED')
+
+    async def test_analysis_clean_and_unsupported_coverage(self):
+        from app.models.repository import File
+        from sqlalchemy import update
+        response = await self.client.post('/repositories/upload', files={
+            'file': ('clean.zip', archive('def add(a, b):\n    return a + b\n'), 'application/zip'),
+        })
+        repo_id = response.json()['id']
+        path = f'/analysis/{repo_id}'
+        await self.client.post(path)
+        clean = (await self.client.get(path + '/summary')).json()
+        self.assertEqual(clean['health_score'], 100)
+        self.assertEqual(clean['total_issues'], 0)
+        async with AsyncSessionLocal() as db:
+            await db.execute(update(File).where(File.repository_id == repo_id).values(language='markdown'))
+            await db.commit()
+        await self.client.post(path)
+        unsupported = (await self.client.get(path + '/summary')).json()
+        self.assertIsNone(unsupported['health_score'])
+        self.assertEqual(unsupported['coverage']['scanned_files'], 0)
+
+    async def test_analysis_density_and_severity_caps(self):
+        from app.services.analyzer.analysis_engine import calculate_health_score
+        score = calculate_health_score({'LOW': 70}, 3833)
+        self.assertGreater(score, 0)
+        self.assertLess(score, 100)
+        self.assertEqual(calculate_health_score({'LOW': 20}, 1000),
+                         calculate_health_score({'LOW': 40}, 2000))
+        self.assertLess(calculate_health_score({'HIGH': 20}, 1000),
+                        calculate_health_score({'LOW': 20}, 1000))
+        self.assertLessEqual(calculate_health_score({'CRITICAL': 1}, 100000), 49)
+        self.assertLessEqual(calculate_health_score({'HIGH': 1}, 100000), 79)
+
+    async def test_analysis_running_duplicate_and_restart(self):
+        from app.models.repository import RepositoryJob
+        repo_id = await self.upload()
+        async with AsyncSessionLocal() as db:
+            job = RepositoryJob(id='analysis-' + repo_id, repository_id=repo_id,
+                                job_type='ANALYSIS', status='RUNNING')
+            db.add(job)
+            await db.commit()
+        response = await self.client.post(f'/analysis/{repo_id}')
+        self.assertEqual(response.json()['job_id'], job.id)
+        await recover_interrupted_jobs()
+        summary = (await self.client.get(f'/analysis/{repo_id}/summary')).json()
+        self.assertEqual(summary['analysis_status'], 'FAILED')
+        self.assertIsNone(summary['health_score'])
+
     async def test_health_remains_responsive_during_embeddings(self):
         entered = asyncio.Event()
         loop = asyncio.get_running_loop()

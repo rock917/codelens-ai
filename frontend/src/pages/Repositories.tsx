@@ -424,7 +424,8 @@ export default function Repositories() {
                     ))}
                   </div>
 
-                  {a && (
+                  {a && a.health_score == null && <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>Run analysis to calculate health</span>}
+                  {a && a.health_score != null && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Health</span>
                       <div style={{

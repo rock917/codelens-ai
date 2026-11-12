@@ -1,131 +1,98 @@
+import asyncio
+import json
+import logging
 import uuid
-import os
-from typing import List
-from sqlalchemy.ext.asyncio import AsyncSession
+from pathlib import Path
+
 from sqlalchemy import select, delete
-from app.models.repository import Repository, File, AnalysisIssue
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database.base import AsyncSessionLocal
+from app.models.repository import File, AnalysisIssue, RepositoryJob
 from app.services.analyzer.complexity_analyzer import analyze_complexity
 from app.services.analyzer.security_analyzer import analyze_security
 from app.services.analyzer.smell_analyzer import analyze_smells
 from app.config.settings import settings
 
-def generate_id() -> str:
-    return str(uuid.uuid4())
+SUPPORTED_LANGUAGES = ("python", "javascript", "typescript")
+logger = logging.getLogger(__name__)
 
-def read_file_content(file_path: str) -> str:
-    try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception:
-        return ""
 
-async def run_analysis(
-    db: AsyncSession,
-    repo_id: str
-) -> dict:
-    print(f"⏳ Running analysis for repo {repo_id}...")
+def calculate_health_score(counts: dict, scanned_loc: int) -> int:
+    """Heuristic: severity-weighted findings per 1,000 scanned lines.
 
-    # Get all files
-    result = await db.execute(
-        select(File).where(File.repository_id == repo_id)
-    )
-    files = result.scalars().all()
+    The 1,000-line floor avoids exaggerated penalties on tiny repositories.
+    A density of 20 gives 50/100; critical/high findings cap the rating.
+    This is a prioritization signal, not a security certification.
+    """
+    weighted = sum(counts.get(level, 0) * weight for level, weight in
+                   (("CRITICAL", 15), ("HIGH", 8), ("MEDIUM", 3), ("LOW", 1)))
+    density = weighted * 1000 / max(1000, scanned_loc)
+    score = round(100 / (1 + density / 20))
+    if counts.get("CRITICAL", 0):
+        score = min(score, 49)
+    elif counts.get("HIGH", 0):
+        score = min(score, 79)
+    return score
 
-    # Delete existing issues
-    await db.execute(
-        delete(AnalysisIssue).where(
-            AnalysisIssue.repository_id == repo_id
-        )
-    )
+
+def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
+    root = (Path(settings.UPLOAD_DIR) / repo_id).resolve()
+    findings = []
+    scanned_files = scanned_loc = 0
+    for file_id, path, language in files:
+        if language not in SUPPORTED_LANGUAGES:
+            continue
+        relative = path.replace('\\', '/')
+        candidates = [root / relative]
+        if '/' in relative:
+            candidates.append(root / relative.split('/', 1)[1])
+        candidate = next((p.resolve() for p in candidates
+                          if p.resolve().is_relative_to(root) and p.is_file()), None)
+        if candidate is None:
+            raise ValueError("Source files are missing. Import this repository again before scanning.")
+        content = candidate.read_text(encoding='utf-8', errors='replace')
+        scanned_files += 1
+        scanned_loc += len(content.splitlines())
+        for analyzer in (analyze_complexity, analyze_security, analyze_smells):
+            for issue in analyzer(path, content, language):
+                findings.append(dict(
+                    id=str(uuid.uuid4()), repository_id=repo_id, file_id=file_id,
+                    issue_type=issue.issue_type, severity=issue.severity,
+                    message=issue.message, line=issue.line, suggestion=issue.suggestion,
+                ))
+    return findings, {"scanned_files": scanned_files, "scanned_loc": scanned_loc,
+                      "unsupported_files": len(files) - scanned_files}
+
+
+async def run_analysis(db: AsyncSession, repo_id: str, job: RepositoryJob) -> dict:
+    rows = (await db.execute(select(File.id, File.path, File.language)
+                            .where(File.repository_id == repo_id))).all()
+    # File I/O and AST work must not block authentication, polling or health checks.
+    findings, coverage = await asyncio.to_thread(_scan_files, repo_id, rows)
+    # Replace results and mark completion in one transaction, never publish half a scan.
+    await db.execute(delete(AnalysisIssue).where(AnalysisIssue.repository_id == repo_id))
+    db.add_all([AnalysisIssue(**finding) for finding in findings])
+    job.status = 'COMPLETED'
+    job.progress = 100
+    job.message = json.dumps(coverage)
+    job.error_message = None
     await db.commit()
+    return coverage
 
-    total_issues = 0
-    severity_counts = {
-        "CRITICAL": 0, "HIGH": 0,
-        "MEDIUM": 0, "LOW": 0
-    }
 
-    repo_dir = os.path.join(settings.UPLOAD_DIR, repo_id)
-
-    for file in files:
-        if file.language not in ("python", "javascript", "typescript"):
-            continue
-
-        # Find actual file path
-        file_full_path = os.path.join(repo_dir, file.path)
-        if not os.path.exists(file_full_path):
-            # Try without first directory component
-            parts = file.path.split('/', 1)
-            if len(parts) > 1:
-                file_full_path = os.path.join(repo_dir, parts[1])
-
-        if not os.path.exists(file_full_path):
-            continue
-
-        content = read_file_content(file_full_path)
-        if not content:
-            continue
-
-        all_issues = []
-
-        # Run all analyzers
-        complexity_issues = analyze_complexity(
-            file.path, content, file.language
-        )
-        security_issues = analyze_security(
-            file.path, content, file.language
-        )
-        smell_issues = analyze_smells(
-            file.path, content, file.language
-        )
-
-        # Convert to DB records
-        for issue in complexity_issues:
-            all_issues.append(AnalysisIssue(
-                id=generate_id(),
-                repository_id=repo_id,
-                file_id=file.id,
-                issue_type=issue.issue_type,
-                severity=issue.severity,
-                message=issue.message,
-                line=issue.line,
-                suggestion=issue.suggestion
-            ))
-
-        for issue in security_issues:
-            all_issues.append(AnalysisIssue(
-                id=generate_id(),
-                repository_id=repo_id,
-                file_id=file.id,
-                issue_type=issue.issue_type,
-                severity=issue.severity,
-                message=issue.message,
-                line=issue.line,
-                suggestion=issue.suggestion
-            ))
-
-        for issue in smell_issues:
-            all_issues.append(AnalysisIssue(
-                id=generate_id(),
-                repository_id=repo_id,
-                file_id=file.id,
-                issue_type=issue.issue_type,
-                severity=issue.severity,
-                message=issue.message,
-                line=issue.line,
-                suggestion=issue.suggestion
-            ))
-
-        for issue in all_issues:
-            db.add(issue)
-            severity_counts[issue.severity] = \
-                severity_counts.get(issue.severity, 0) + 1
-            total_issues += 1
-
-    await db.commit()
-
-    print(f"✅ Analysis complete! Found {total_issues} issues")
-    return {
-        "total_issues": total_issues,
-        "severity_counts": severity_counts
-    }
+async def run_analysis_job(repo_id: str, job_id: str):
+    # Background work owns its session; the request session may already be closed.
+    async with AsyncSessionLocal() as db:
+        job = await db.get(RepositoryJob, job_id)
+        if job is None:
+            return
+        try:
+            await run_analysis(db, repo_id, job)
+        except Exception:
+            await db.rollback()
+            logger.exception("Analysis failed for repository %s", repo_id)
+            job = await db.get(RepositoryJob, job_id)
+            if job is not None:
+                job.status = 'FAILED'
+                job.error_message = 'Scan failed. Check that source files are available or import the repository again. Previous results were retained.'
+                await db.commit()

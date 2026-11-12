@@ -59,7 +59,11 @@ export interface AnalysisSummary {
   total_issues: number
   by_severity: Record<string, number>
   by_type: Record<string, number>
-  health_score: number
+  health_score: number | null
+  analysis_status: 'NOT_RUN' | 'LEGACY' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  coverage: { scanned_files: number, scanned_loc: number, unsupported_files: number } | null
+  completed_at: string | null
+  error_message: string | null
 }
 
 export interface RepositoryStats {

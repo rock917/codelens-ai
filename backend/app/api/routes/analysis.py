@@ -3,8 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database.base import get_db
-from app.models.repository import Repository, AnalysisIssue, File
-from app.services.analyzer.analysis_engine import run_analysis
+from app.models.repository import Repository, AnalysisIssue, File, RepositoryJob
+from app.services.analyzer.analysis_engine import run_analysis_job, calculate_health_score
+import json
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -18,7 +21,7 @@ async def trigger_analysis(
 ):
     await owned_repository(db, repo_id, user.id)
     result = await db.execute(
-        select(Repository).where(Repository.id == repo_id)
+        select(Repository).where(Repository.id == repo_id).with_for_update()
     )
     repo = result.scalar_one_or_none()
     if not repo:
@@ -26,9 +29,19 @@ async def trigger_analysis(
     if repo.status != "READY":
         raise HTTPException(400, f"Repository not ready. Status: {repo.status}")
 
-    background_tasks.add_task(run_analysis, db, repo_id)
-
-    return {"message": "Analysis started", "repository_id": repo_id}
+    active = await db.scalar(select(RepositoryJob.id).where(
+        RepositoryJob.repository_id == repo_id, RepositoryJob.job_type == 'ANALYSIS',
+        RepositoryJob.status.in_(['PENDING', 'RUNNING']),
+    ).limit(1))
+    if active:
+        return {"message": "Analysis already running", "repository_id": repo_id, "job_id": active}
+    job = RepositoryJob(id=str(uuid.uuid4()), repository_id=repo_id,
+                        job_type='ANALYSIS', status='RUNNING',
+                        created_at=datetime.now(timezone.utc).replace(tzinfo=None))
+    db.add(job)
+    await db.commit()
+    background_tasks.add_task(run_analysis_job, repo_id, job.id)
+    return {"message": "Analysis started", "repository_id": repo_id, "job_id": job.id}
 
 @router.get("/{repo_id}/issues")
 async def get_issues(
@@ -112,19 +125,29 @@ async def get_analysis_summary(
     by_type = {row[0]: row[1] for row in type_result.all()}
 
     total = sum(counts.values())
+    jobs = (await db.scalars(select(RepositoryJob).where(
+        RepositoryJob.repository_id == repo_id, RepositoryJob.job_type == 'ANALYSIS',
+    ).order_by(RepositoryJob.created_at.desc(), RepositoryJob.id.desc()))).all()
+    # Current job and last successful result are separate: a failed rescan must
+    # not turn old findings into a claim that the latest scan succeeded.
+    active = next((job for job in jobs if job.status in ('PENDING', 'RUNNING')), None)
+    latest = active or (jobs[0] if jobs else None)
+    completed = next((job for job in jobs if job.status == 'COMPLETED'), None)
+    coverage = json.loads(completed.message) if completed and completed.message else None
+    status = latest.status if latest else ('LEGACY' if total else 'NOT_RUN')
+    score = None
+    if coverage and coverage['scanned_files'] > 0:
+        score = calculate_health_score(counts, coverage['scanned_loc'])
 
     return {
         "repository_id": repo_id,
         "total_issues": total,
         "by_severity": counts,
         "by_type": by_type,
-        "health_score": _calculate_health_score(counts)
+        "health_score": score,
+        "analysis_status": status,
+        "coverage": coverage,
+        "completed_at": completed.updated_at if completed else None,
+        "error_message": latest.error_message if latest else None,
+        "score_version": "density-v1",
     }
-
-def _calculate_health_score(counts: dict) -> int:
-    score = 100
-    score -= counts.get("CRITICAL", 0) * 15
-    score -= counts.get("HIGH", 0) * 8
-    score -= counts.get("MEDIUM", 0) * 3
-    score -= counts.get("LOW", 0) * 1
-    return max(0, score)

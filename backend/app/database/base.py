@@ -75,8 +75,12 @@ async def init_db():
 
 async def recover_interrupted_jobs():
     """Called before serving requests, on a single-worker/single-instance host."""
-    from app.models.repository import Repository, RepositoryStatus
+    from app.models.repository import Repository, RepositoryStatus, RepositoryJob
     async with AsyncSessionLocal() as db:
+        await db.execute(update(RepositoryJob).where(
+            RepositoryJob.job_type == 'ANALYSIS',
+            RepositoryJob.status.in_(['PENDING', 'RUNNING']),
+        ).values(status='FAILED', error_message='Scan interrupted by a server restart. Run analysis again. Previous results were retained.'))
         await db.execute(
             update(Repository)
             .where(Repository.status.in_([
