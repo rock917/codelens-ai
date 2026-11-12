@@ -1,13 +1,13 @@
 from app.auth import AuthUser, get_current_user, owned_file, owned_repository
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
+import hashlib
 import uuid
 import json
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 
 from app.database.base import get_db
 from app.models.repository import Repository, File as FileModel, AnalysisIssue
@@ -18,9 +18,7 @@ from app.schemas.repository import (
     FileResponse,
     RepositoryStatsResponse
 )
-from app.services.repository_service import (
-    create_repository,
-)
+from app.services.admission_service import admit, usage, normalize_url, resolve_revision
 from app.workers.ingestion_worker import run_zip_ingestion, run_github_ingestion
 from app.config.settings import settings
 
@@ -28,96 +26,48 @@ from app.config.settings import settings
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
 
+@router.get("/usage")
+async def get_usage(db: AsyncSession = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    return await usage(db, user.id)
+
+
 @router.post("/upload", response_model=RepositoryUploadResponse)
-async def upload_zip(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    user: AuthUser = Depends(get_current_user),
-):
-    # Validate file
-    if not file.filename.endswith(".zip"):
-        raise HTTPException(400, "Only ZIP files are supported")
-
-    content = await file.read()
-    size_mb = len(content) / (1024 * 1024)
-
-    if size_mb > settings.MAX_UPLOAD_SIZE_MB:
-        raise HTTPException(
-            400,
-            f"File too large. Max {settings.MAX_UPLOAD_SIZE_MB}MB"
-        )
-
-    # Save ZIP temporarily
+async def upload_zip(background_tasks: BackgroundTasks, file: UploadFile = File(...),
+                     db: AsyncSession = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    if not file.filename or not file.filename.lower().endswith('.zip'):
+        raise HTTPException(400, 'Only ZIP files are supported')
+    content = await file.read(settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024 + 1)
+    if len(content) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+        raise HTTPException(400, f'File too large. Max {settings.MAX_UPLOAD_SIZE_MB}MB')
+    revision = hashlib.sha256(content).hexdigest()
+    # Write before admission so filesystem errors never strand a reservation.
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-
-    temp_path = os.path.join(
-        settings.UPLOAD_DIR,
-        f"temp_{uuid.uuid4()}.zip"
-    )
-
-    with open(temp_path, "wb") as f:
-        f.write(content)
-
-    # Create repo record
-    name = file.filename.replace(".zip", "")
-    repo = await create_repository(db, name, "zip", owner_id=user.id)
-
-    # Process in background
-    background_tasks.add_task(
-        run_zip_ingestion,
-        repo.id,
-        temp_path
-    )
-
-    return RepositoryUploadResponse(
-        id=repo.id,
-        name=repo.name,
-        status=repo.status,
-        message="Repository upload started. Processing in background."
-    )
+    temp_path = os.path.join(settings.UPLOAD_DIR, f'temp_{uuid.uuid4()}.zip')
+    try:
+        with open(temp_path, 'wb') as output:
+            output.write(content)
+        repo, reused = await admit(db, user.id, file.filename[:-4], 'zip', 'zip:' + revision, revision)
+        if not reused:
+            background_tasks.add_task(run_zip_ingestion, repo.id, temp_path)
+            temp_path = None
+        return RepositoryUploadResponse(id=repo.id, name=repo.name, status=repo.status, reused=reused,
+            message='Opening your existing repository. No credit used.' if reused else 'Import started. One slot reserved until it succeeds.')
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 @router.post("/github", response_model=RepositoryUploadResponse)
-async def ingest_github(
-    request: GithubIngestRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    user: AuthUser = Depends(get_current_user),
-):
-    url = request.url.strip()
-
-    try:
-        parsed_url = urlsplit(url)
-        valid_url = (
-            parsed_url.scheme == 'https' and parsed_url.hostname in ('github.com', 'gitlab.com')
-            and not parsed_url.username and not parsed_url.password
-            and parsed_url.port in (None, 443) and not parsed_url.query and not parsed_url.fragment
-            and len(parsed_url.path.strip('/').split('/')) >= 2
-        )
-    except ValueError:
-        valid_url = False
-    if not valid_url:
-        raise HTTPException(
-            400,
-            "Only HTTPS GitHub/GitLab repository URLs are supported"
-        )
-
-    name = request.name or url.rstrip("/").split("/")[-1]
-    repo = await create_repository(db, name, "github", url, owner_id=user.id)
-
-    background_tasks.add_task(
-        run_github_ingestion,
-        repo.id,
-        url
-    )
-
-    return RepositoryUploadResponse(
-        id=repo.id,
-        name=repo.name,
-        status=repo.status,
-        message="GitHub repository cloning started."
-    )
+async def ingest_github(request: GithubIngestRequest, background_tasks: BackgroundTasks,
+                        db: AsyncSession = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    url = normalize_url(request.url)
+    revision = await resolve_revision(url)
+    repo, reused = await admit(db, user.id, request.name or url.rsplit('/', 1)[-1],
+                              'github', url, revision, request.confirmed_revision)
+    if not reused:
+        background_tasks.add_task(run_github_ingestion, repo.id, url, revision)
+    return RepositoryUploadResponse(id=repo.id, name=repo.name, status=repo.status, reused=reused,
+        message='Opening your existing repository. No credit used.' if reused else 'Import started. One slot reserved until it succeeds.')
 
 
 @router.get("", response_model=list[RepositoryResponse])
@@ -272,6 +222,10 @@ async def delete_repository(
     if not repo:
         raise HTTPException(404, "Repository not found")
 
+    if repo.status not in ('READY', 'FAILED'):
+        raise HTTPException(409, 'Wait for this import to finish before deleting it.')
+    from app.models.summary import RepositorySummary
+    await db.execute(delete(RepositorySummary).where(RepositorySummary.repository_id == repo_id))
     await db.delete(repo)
     await db.commit()
 

@@ -53,7 +53,7 @@ async def get_db():
 
 async def init_db():
     async with engine.begin() as conn:
-        from app.models import repository, conversation, summary
+        from app.models import repository, conversation, summary, usage
         await conn.run_sync(Base.metadata.create_all)
         columns = await conn.run_sync(lambda sync: inspect(sync).get_columns('repositories'))
         if 'owner_id' not in {column['name'] for column in columns}:
@@ -69,14 +69,16 @@ async def init_db():
                     WHERE n.nspname = 'public' AND c.relname = :name
                 """), {'name': table_name})
                 if not safe:
-                    raise RuntimeError('Apply backend/migrations/001_private_accounts.sql: app tables must be private')
+                    raise RuntimeError('Apply all backend/migrations SQL files before serving: app tables must be private')
     print("✅ Database initialized")
 
 
 async def recover_interrupted_jobs():
     """Called before serving requests, on a single-worker/single-instance host."""
     from app.models.repository import Repository, RepositoryStatus, RepositoryJob
+    from app.models.usage import AnalysisAdmission
     async with AsyncSessionLocal() as db:
+        await db.execute(update(AnalysisAdmission).where(AnalysisAdmission.status == 'RESERVED').values(status='FAILED'))
         await db.execute(update(RepositoryJob).where(
             RepositoryJob.job_type.startswith('CHAT:'),
             RepositoryJob.status.in_(['PENDING', 'RUNNING']),

@@ -6,6 +6,7 @@ import {
   CheckCircle, XCircle, Loader, Zap
 } from 'lucide-react'
 import TopBar from '../components/layout/TopBar'
+import UsageBanner from '../components/UsageBanner'
 import { getRepositories, getAnalysisSummary, getRepositoryStats } from '../services/api'
 import type { Repository } from '../types'
 
@@ -129,6 +130,7 @@ export default function Dashboard() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TopBar title="Dashboard" subtitle="Repository intelligence overview" />
+      <UsageBanner refreshKey={repos.map(r => r.id + r.status).join(',')} />
 
       <div style={{ padding: '24px', flex: 1, overflow: 'auto' }}>
 

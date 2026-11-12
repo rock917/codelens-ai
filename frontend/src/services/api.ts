@@ -19,8 +19,10 @@ export const uploadRepository = (file: File) => {
   return api.post('/repositories/upload', form)
 }
 
-export const ingestGithub = (url: string, name?: string) =>
-  api.post('/repositories/github', { url, name })
+export const ingestGithub = (url: string, name?: string, confirmedRevision?: string) =>
+  api.post('/repositories/github', { url, name, confirmed_revision: confirmedRevision })
+
+export const getAnalysisUsage = () => api.get('/repositories/usage')
 
 export const getRepositories = () =>
   api.get('/repositories')

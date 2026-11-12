@@ -6,6 +6,8 @@ import {
   RefreshCw
 } from 'lucide-react'
 import TopBar from '../components/layout/TopBar'
+import UsageBanner from '../components/UsageBanner'
+import { useNavigate } from 'react-router-dom'
 import {
   getRepositories, uploadRepository,
   ingestGithub, deleteRepository,
@@ -37,33 +39,36 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuccess: () => void }) {
+export function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuccess: (result: { id: string; message: string; reused: boolean; status?: string }) => void }) {
   const [tab, setTab] = useState<'zip' | 'github'>('zip')
   const [githubUrl, setGithubUrl] = useState('')
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [confirmation, setConfirmation] = useState<{ revision: string; message: string } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function handleFile(file: File) {
-    if (!file.name.endsWith('.zip')) {
+    if (uploading) return
+    if (!file.name.toLowerCase().endsWith('.zip')) {
       setError('Only ZIP files are supported')
       return
     }
     setUploading(true)
     setError('')
     try {
-      await uploadRepository(file)
-      onSuccess()
+      const { data } = await uploadRepository(file)
+      onSuccess(data)
       onClose()
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Upload failed')
+      setError(err.response?.data?.detail?.message || err.response?.data?.detail || 'Upload failed')
     } finally {
       setUploading(false)
     }
   }
 
-  async function handleGithub() {
+  async function handleGithub(confirmedRevision?: string) {
+    if (uploading) return
     if (!githubUrl.trim()) {
       setError('Please enter a GitHub URL')
       return
@@ -71,11 +76,13 @@ function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuccess: (
     setUploading(true)
     setError('')
     try {
-      await ingestGithub(githubUrl.trim())
-      onSuccess()
+      const { data } = await ingestGithub(githubUrl.trim(), undefined, confirmedRevision)
+      onSuccess(data)
       onClose()
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to clone repository')
+      const detail = err.response?.data?.detail
+      if (detail?.code === 'revision_confirmation') setConfirmation(detail)
+      else setError(detail?.message || detail || 'Failed to clone repository')
     } finally {
       setUploading(false)
     }
@@ -166,22 +173,28 @@ function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuccess: (
                 className="input"
                 placeholder="https://github.com/username/repo"
                 value={githubUrl}
-                onChange={e => setGithubUrl(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleGithub()}
+                onChange={e => { setGithubUrl(e.target.value); setConfirmation(null); setError('') }}
+                onKeyDown={e => e.key === 'Enter' && !confirmation && handleGithub()}
               />
             </div>
             <button
               className="btn-primary"
               style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-              onClick={handleGithub}
-              disabled={uploading}
+              onClick={() => void handleGithub()}
+              disabled={uploading || !!confirmation}
             >
               <GitBranch size={14} />
-              {uploading ? 'Cloning...' : 'Clone Repository'}
+              {uploading ? 'Checking...' : 'Check & Analyze'}
             </button>
           </div>
         )}
 
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>Unchanged commits and identical ZIP uploads reuse your saved repository for free. New imports reserve one of your 10 lifetime credits.</p>
+        {confirmation && <div role="alert" style={{ marginTop: 12, fontSize: 12, lineHeight: 1.7 }}>
+          <p>{confirmation.message}</p>
+          <button className="btn-primary" disabled={uploading} onClick={() => void handleGithub(confirmation.revision)}>Analyze new revision · 1 credit</button>
+          <button className="btn-ghost" disabled={uploading} onClick={onClose}>Keep existing results</button>
+        </div>}
         {error && (
           <div style={{
             marginTop: '12px', padding: '8px 12px', borderRadius: '6px',
@@ -207,6 +220,8 @@ function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuccess: (
 }
 
 export default function Repositories() {
+  const navigate = useNavigate()
+  const [notice, setNotice] = useState('')
   const [repos, setRepos] = useState<Repository[]>([])
   const [stats, setStats] = useState<Record<string, any>>({})
   const [analysis, setAnalysis] = useState<Record<string, any>>({})
@@ -260,7 +275,7 @@ export default function Repositories() {
 
   async function handleDelete(id: string, e: React.MouseEvent) {
     e.stopPropagation()
-    if (!confirm('Delete this repository?')) return
+    if (!confirm('Delete this repository and its chats? Used analysis credits will not be restored.')) return
     setDeleting(id)
     try {
       await deleteRepository(id)
@@ -277,6 +292,8 @@ export default function Repositories() {
       <TopBar title="Repositories" subtitle="Manage your indexed codebases" />
 
       <div style={{ padding: '24px', flex: 1, overflow: 'auto' }}>
+        <UsageBanner refreshKey={repos.map(r => r.id + r.status).join(',')} />
+        {notice && <p role="status" style={{ marginBottom: 16, color: 'var(--success)' }}>{notice}</p>}
         {/* Actions */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -353,7 +370,7 @@ export default function Repositories() {
                   </div>
 
                   <button onClick={e => handleDelete(repo.id, e)}
-                    disabled={deleting === repo.id}
+                    disabled={deleting === repo.id || isProcessing}
                     style={{
                       background: 'none', border: 'none', cursor: 'pointer',
                       color: 'var(--text-muted)', padding: '4px',
@@ -455,7 +472,11 @@ export default function Repositories() {
       {showModal && (
         <UploadModal
           onClose={() => setShowModal(false)}
-          onSuccess={loadRepos}
+          onSuccess={result => {
+            setNotice(result.message)
+            void loadRepos()
+            if (result.reused && result.status === 'READY') navigate(`/explorer?repository=${encodeURIComponent(result.id)}`)
+          }}
         />
       )}
     </div>

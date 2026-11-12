@@ -14,6 +14,7 @@ import time
 import unittest
 from unittest.mock import AsyncMock, patch
 import zipfile
+import uuid
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
@@ -85,6 +86,11 @@ async def fake_stream(*args, **kwargs):
 class BackendChecks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await init_db()
+        # Each test gets its own empty schema; quota/cache tests must not share history.
+        from app.database.base import Base
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
         patch.object(auth, '_fetch_user', side_effect=fake_auth).start()
         self.summary = patch.object(service, '_run_summarization_background', new=AsyncMock())
         self.summary.start()
@@ -105,7 +111,7 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
     async def upload(self):
-        response = await self.client.post('/repositories/upload', files={'file': ('sample.zip', archive(), 'application/zip')})
+        response = await self.client.post('/repositories/upload', files={'file': ('sample.zip', archive() + uuid.uuid4().hex.encode(), 'application/zip')})
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()['id']
 
@@ -146,6 +152,93 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post(f'/repositories/{repo_id}/reindex')
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(vector_store.get_chunk_count(repo_id), status['total_chunks'])
+
+    async def test_lifetime_quota_cache_and_deletion(self):
+        payload = archive()
+        async def submit(data=payload):
+            return await self.client.post('/repositories/upload', files={'file': ('sample.zip', data, 'application/zip')})
+        first = await submit()
+        repo_id = first.json()['id']
+        second = await submit()
+        self.assertTrue(second.json()['reused'])
+        self.assertEqual(second.json()['id'], repo_id)
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['used'], 1)
+        for number in range(9):
+            self.assertEqual((await submit(payload + str(number).encode())).status_code, 200)
+        blocked = await submit(payload + b'eleventh')
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json()['detail']['code'], 'analysis_limit')
+        self.assertTrue((await submit()).json()['reused'])
+        from app.models.summary import RepositorySummary
+        async with AsyncSessionLocal() as db:
+            db.add(RepositorySummary(id='quota-summary', repository_id=repo_id,
+                                     summary_type='repository', content='Saved summary'))
+            await db.commit()
+        self.assertEqual((await self.client.delete(f'/repositories/{repo_id}')).status_code, 200)
+        async with AsyncSessionLocal() as db:
+            self.assertIsNone(await db.get(RepositorySummary, 'quota-summary'))
+        self.assertEqual((await submit()).status_code, 409)
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['used'], 10)
+        self.client.headers['Authorization'] = 'Bearer user-b'
+        own = await submit()
+        self.assertEqual(own.status_code, 200)
+        self.assertNotEqual(own.json()['id'], repo_id)
+        self.assertFalse(own.json()['reused'])
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['used'], 1)
+
+    async def test_failed_import_and_restart_release_reservations(self):
+        with patch.object(embedding_service, 'embed_batch', side_effect=RuntimeError('failure')):
+            await self.upload()
+        self.assertEqual((await self.client.get('/repositories/usage')).json(), dict(limit=10, used=0, reserved=0, remaining=10))
+        with patch('app.api.routes.repository.run_zip_ingestion', new=AsyncMock()):
+            repo_id = await self.upload()
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['reserved'], 1)
+        self.assertEqual((await self.client.delete(f'/repositories/{repo_id}')).status_code, 409)
+        await recover_interrupted_jobs()
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['remaining'], 10)
+        self.assertEqual((await self.client.get(f'/repositories/{repo_id}')).json()['status'], 'FAILED')
+
+    async def test_parallel_admissions_cannot_exceed_limit_or_duplicate_cache(self):
+        from app.services.admission_service import admit, usage
+        from fastapi import HTTPException
+        async def request(key):
+            async with AsyncSessionLocal() as db:
+                try:
+                    repo, reused = await admit(db, USER_A, 'parallel', 'zip', key, key)
+                    return repo.id, reused
+                except HTTPException as exc:
+                    return exc.status_code, False
+        duplicates = await asyncio.gather(*(request('same') for _ in range(5)))
+        self.assertEqual(len({item[0] for item in duplicates}), 1)
+        self.assertEqual(sum(not item[1] for item in duplicates), 1)
+        results = await asyncio.gather(*(request(str(n)) for n in range(12)))
+        self.assertEqual(sum(item[0] == 409 for item in results), 3)
+        async with AsyncSessionLocal() as db:
+            self.assertEqual((await usage(db, USER_A))['reserved'], 10)
+
+    async def test_github_cache_requires_new_revision_confirmation(self):
+        from app.services.admission_service import normalize_url
+        self.assertEqual(normalize_url('https://GitHub.com/Example/Project.git/'), 'https://github.com/example/project')
+        url = 'https://github.com/example/project'
+        with patch('app.api.routes.repository.resolve_revision', new=AsyncMock(return_value='a' * 40)), patch('app.api.routes.repository.run_github_ingestion', new=AsyncMock()) as worker:
+            first = await self.client.post('/repositories/github', json={'url': url})
+            cached = await self.client.post('/repositories/github', json={'url': url + '.git'})
+            self.assertEqual(first.json()['id'], cached.json()['id'])
+            self.assertTrue(cached.json()['reused'])
+            worker.assert_awaited_once_with(first.json()['id'], url, 'a' * 40)
+        async with AsyncSessionLocal() as db:
+            await service.update_repository_status(db, first.json()['id'], 'READY')
+        with patch('app.api.routes.repository.resolve_revision', new=AsyncMock(return_value='b' * 40)), patch('app.api.routes.repository.run_github_ingestion', new=AsyncMock()):
+            prompt = await self.client.post('/repositories/github', json={'url': url})
+            self.assertEqual(prompt.status_code, 409)
+            self.assertEqual(prompt.json()['detail']['code'], 'revision_confirmation')
+            stale = await self.client.post('/repositories/github', json={'url': url, 'confirmed_revision': 'a' * 40})
+            self.assertEqual(stale.status_code, 409)
+            confirmed = await self.client.post('/repositories/github', json={'url': url, 'confirmed_revision': 'b' * 40})
+            self.assertEqual(confirmed.status_code, 200)
+            self.assertNotEqual(confirmed.json()['id'], first.json()['id'])
+        counts = (await self.client.get('/repositories/usage')).json()
+        self.assertEqual((counts['used'], counts['reserved']), (1, 1))
 
     async def test_analysis_lifecycle_and_atomic_rescan(self):
         repo_id = await self.upload()
@@ -498,7 +591,7 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
                     'https://github.com:8443/a/b'):
             response = await self.client.post('/repositories/github', json={'url': url})
             self.assertEqual(response.status_code, 400, url)
-        with patch('app.api.routes.repository.run_github_ingestion', new=AsyncMock()) as worker:
+        with patch('app.api.routes.repository.run_github_ingestion', new=AsyncMock()) as worker, patch('app.api.routes.repository.resolve_revision', new=AsyncMock(return_value='a' * 40)):
             response = await self.client.post('/repositories/github', json={
                 'url': 'https://github.com/example/project', 'owner_id': USER_B,
             })

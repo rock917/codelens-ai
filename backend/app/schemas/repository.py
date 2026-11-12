@@ -7,10 +7,12 @@ class RepositoryUploadResponse(BaseModel):
     name: str
     status: str
     message: str
+    reused: bool = False
 
 class GithubIngestRequest(BaseModel):
     url: str
     name: Optional[str] = None
+    confirmed_revision: Optional[str] = None
 
 class RepositoryResponse(BaseModel):
     id: str

@@ -111,6 +111,8 @@ async def update_repository_status(
 
         repo.error_message = error_message
 
+        from app.services.admission_service import settle
+        await settle(db, repo_id, status)
         await db.commit()
 
 
@@ -197,6 +199,7 @@ async def process_github_url(
     db: AsyncSession,
     repo_id: str,
     github_url: str,
+    revision: str = None,
 ):
     clone_dir = os.path.join(
         settings.UPLOAD_DIR,
@@ -215,12 +218,15 @@ async def process_github_url(
             exist_ok=True,
         )
 
-        await asyncio.to_thread(
-            git.Repo.clone_from,
-            github_url,
-            clone_dir,
-            depth=1,
-        )
+        def clone_snapshot():
+            # Fetch the admitted commit, never a moving HEAD.
+            repo = git.Repo.init(clone_dir)
+            with repo.git.custom_environment(GIT_TERMINAL_PROMPT='0'):
+                repo.git.fetch('--depth=1', github_url, revision or 'HEAD', kill_after_timeout=180)
+                repo.git.checkout('--detach', 'FETCH_HEAD')
+            if revision and repo.head.commit.hexsha != revision:
+                raise ValueError('Repository revision changed; please retry. No credit was used.')
+        await asyncio.to_thread(clone_snapshot)
 
         await index_directory(
             db,

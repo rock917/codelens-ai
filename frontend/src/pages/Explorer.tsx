@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import {
   FileCode, ChevronRight,
@@ -152,6 +153,7 @@ function TreeNodeItem({ node, depth, selectedFile, onSelect }: {
 
 // ── Main ──────────────────────────────────────────────────────
 export default function Explorer() {
+  const [searchParams] = useSearchParams()
   const [repos, setRepos] = useState<Repository[]>([])
   const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null)
   const [files, setFiles] = useState<FileRecord[]>([])
@@ -171,7 +173,7 @@ export default function Explorer() {
       const res = await getRepositories()
       const ready = res.data.filter((r: Repository) => r.status === 'READY')
       setRepos(ready)
-      if (ready.length > 0) selectRepo(ready[0])
+      if (ready.length > 0) selectRepo(ready.find((repo: Repository) => repo.id === searchParams.get('repository')) || ready[0])
     } catch (err) { console.error(err) }
   }
 
