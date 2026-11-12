@@ -11,6 +11,7 @@ import DocsGen from './pages/DocsGen'
 import Explorer from './pages/Explorer'
 import SearchPage from './pages/Search'
 import Settings from './pages/Settings'
+import { ToastProvider } from './components/ui/AccountFeedback'
 
 function PrivateWorkspace() {
   const { session, loading } = useAuth()
@@ -44,10 +45,10 @@ function PrivateWorkspace() {
   )
 }
 export default function App() {
-  return <BrowserRouter><AuthProvider><Routes>
+  return <BrowserRouter><ToastProvider><AuthProvider><Routes>
     <Route path="/login" element={<Login />} />
     <Route path="/auth/callback" element={<AuthCallback />} />
     <Route path="/reset-password" element={<ResetPassword />} />
     <Route path="/*" element={<PrivateWorkspace />} />
-  </Routes></AuthProvider></BrowserRouter>
+  </Routes></AuthProvider></ToastProvider></BrowserRouter>
 }
