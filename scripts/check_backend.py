@@ -170,6 +170,94 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         await self.client.post(path)
         self.assertEqual((await self.client.get(path + '/summary')).json()['analysis_status'], 'COMPLETED')
 
+    async def test_chat_history_survives_restart_and_supports_management(self):
+        repo_id = await self.upload()
+        first = (await self.client.post('/chat', json={'repository_id': repo_id, 'question': 'First question'})).json()
+        conv_id = first['conversation_id']
+        second = await self.client.post('/chat', json={
+            'repository_id': repo_id, 'conversation_id': conv_id, 'question': 'Follow up', 'stream': True,
+        })
+        self.assertIn('"type": "done"', second.text)
+        # Dispose connections and initialize again: all history is in the database.
+        await engine.dispose()
+        await init_db()
+        history = (await self.client.get(f'/chat/history/{conv_id}')).json()
+        self.assertEqual([m['role'] for m in history], ['user', 'assistant', 'user', 'assistant'])
+        self.assertEqual(history[0]['content'], 'First question')
+        self.assertEqual(history[1]['sources'], first['sources'])
+        self.assertTrue(history[3]['sources'])
+        renamed = await self.client.patch(f'/chat/conversations/{conv_id}', json={'title': ' Architecture notes '})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()['title'], 'Architecture notes')
+        listing = (await self.client.get(f'/chat/conversations/{repo_id}')).json()
+        self.assertEqual(listing[0]['title'], 'Architecture notes')
+        self.assertFalse(listing[0]['is_generating'])
+        self.assertEqual((await self.client.patch(f'/chat/conversations/{conv_id}', json={'title': ' '})).status_code, 422)
+        self.assertEqual((await self.client.delete(f'/chat/conversations/{conv_id}')).status_code, 204)
+        self.assertEqual((await self.client.get(f'/chat/history/{conv_id}')).status_code, 404)
+        self.assertEqual((await self.client.get(f'/chat/conversations/{repo_id}')).json(), [])
+        from app.models.conversation import Message
+        from app.models.repository import RepositoryJob
+        async with AsyncSessionLocal() as db:
+            self.assertIsNone(await db.scalar(select(Message.id).where(Message.conversation_id == conv_id)))
+            self.assertIsNone(await db.scalar(select(RepositoryJob.id).where(RepositoryJob.job_type == f'CHAT:{conv_id}')))
+        self.assertEqual((await self.client.get(f'/repositories/{repo_id}')).status_code, 200)
+
+    async def test_chat_failure_preserves_question_without_saving_partial_reply(self):
+        repo_id = await self.upload()
+        async def failing_stream(**kwargs):
+            yield 'partial reply', []
+            raise RuntimeError('Simulated provider outage')
+        with patch('app.api.routes.chat.stream_question', new=failing_stream):
+            result = await self.client.post('/chat', json={'repository_id': repo_id, 'question': 'Keep this question', 'stream': True})
+        self.assertIn('"type": "error"', result.text)
+        self.assertNotIn('"type": "done"', result.text)
+        listing = (await self.client.get(f'/chat/conversations/{repo_id}')).json()
+        self.assertFalse(listing[0]['is_generating'])
+        conv_id = listing[0]['id']
+        history = (await self.client.get(f'/chat/history/{conv_id}')).json()
+        self.assertEqual([(m['role'], m['content']) for m in history], [('user', 'Keep this question')])
+        with patch('app.api.routes.chat.ask_question', new=AsyncMock(side_effect=RuntimeError('Provider outage'))):
+            result = await self.client.post('/chat', json={'repository_id': repo_id, 'conversation_id': conv_id, 'question': 'Keep this too'})
+        self.assertEqual(result.status_code, 502)
+        history = (await self.client.get(f'/chat/history/{conv_id}')).json()
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[-1]['content'], 'Keep this too')
+
+    async def test_chat_disconnect_and_busy_conversation(self):
+        from app.api.routes.chat import chat
+        from app.schemas.chat import ChatRequest
+        from app.auth import AuthUser
+        repo_id = await self.upload()
+        # Close the stream at the first metadata event, before the model is called.
+        async with AsyncSessionLocal() as db:
+            response = await chat(ChatRequest(repository_id=repo_id, question='Interrupted question', stream=True),
+                                  db=db, user=AuthUser(id=USER_A, email='user-a@example.com'))
+            await anext(response.body_iterator)
+            listing = (await self.client.get(f'/chat/conversations/{repo_id}')).json()
+            conv_id = listing[0]['id']
+            self.assertTrue(listing[0]['is_generating'])
+            self.assertEqual((await self.client.delete(f'/chat/conversations/{conv_id}')).status_code, 409)
+            self.assertEqual((await self.client.post('/chat', json={
+                'repository_id': repo_id, 'conversation_id': conv_id, 'question': 'Concurrent question',
+            })).status_code, 409)
+            await response.body_iterator.aclose()
+        self.assertFalse((await self.client.get(f'/chat/conversations/{repo_id}')).json()[0]['is_generating'])
+        self.assertEqual(len((await self.client.get(f'/chat/history/{conv_id}')).json()), 1)
+
+    async def test_chat_restart_releases_interrupted_reply(self):
+        from app.models.repository import RepositoryJob
+        repo_id = await self.upload()
+        result = (await self.client.post('/chat', json={'repository_id': repo_id, 'question': 'Persist me'})).json()
+        conv_id = result['conversation_id']
+        async with AsyncSessionLocal() as db:
+            db.add(RepositoryJob(id='chat-restart-' + conv_id, repository_id=repo_id,
+                                 job_type=f'CHAT:{conv_id}', status='RUNNING'))
+            await db.commit()
+        await recover_interrupted_jobs()
+        self.assertFalse((await self.client.get(f'/chat/conversations/{repo_id}')).json()[0]['is_generating'])
+        self.assertEqual(len((await self.client.get(f'/chat/history/{conv_id}')).json()), 2)
+
     async def test_analysis_clean_and_unsupported_coverage(self):
         from app.models.repository import File
         from sqlalchemy import update
@@ -343,6 +431,8 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         for token in ('user-a', 'user-b'):
             self.assertEqual((await self.client.get('/repositories/legacy-unowned', headers={'Authorization': f'Bearer {token}'})).status_code, 404)
         self.client.headers['Authorization'] = 'Bearer user-b'
+        self.assertEqual((await self.client.patch(f'/chat/conversations/{conversation_id}', json={'title': 'Not yours'})).status_code, 404)
+        self.assertEqual((await self.client.delete(f'/chat/conversations/{conversation_id}')).status_code, 404)
         listed = (await self.client.get('/repositories')).json()
         self.assertNotIn(repo_id, [r['id'] for r in listed])
         self.assertNotIn('legacy-unowned', [r['id'] for r in listed])

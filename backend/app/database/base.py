@@ -78,6 +78,10 @@ async def recover_interrupted_jobs():
     from app.models.repository import Repository, RepositoryStatus, RepositoryJob
     async with AsyncSessionLocal() as db:
         await db.execute(update(RepositoryJob).where(
+            RepositoryJob.job_type.startswith('CHAT:'),
+            RepositoryJob.status.in_(['PENDING', 'RUNNING']),
+        ).values(status='FAILED', error_message='Reply interrupted by a server restart. The question is saved; send it again to get a reply.'))
+        await db.execute(update(RepositoryJob).where(
             RepositoryJob.job_type == 'ANALYSIS',
             RepositoryJob.status.in_(['PENDING', 'RUNNING']),
         ).values(status='FAILED', error_message='Scan interrupted by a server restart. Run analysis again. Previous results were retained.'))

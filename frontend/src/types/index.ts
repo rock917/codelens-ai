@@ -96,6 +96,8 @@ export interface SourceReference {
 }
 
 export interface Conversation {
+  updated_at: string
+  is_generating: boolean
   id: string
   repository_id: string
   title: string

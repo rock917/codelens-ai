@@ -8,17 +8,20 @@ import {
   GitBranch,
   FileCode,
   ChevronRight,
-  Loader,
   MessageSquare,
   Plus,
-  Clock,
+  Pencil,
+  Trash2,
+  X,
+  Check,
   Zap,
 } from 'lucide-react'
 import TopBar from '../components/layout/TopBar'
+import './chat.css'
 import {
   getRepositories,
   sendMessageStream,
-  getConversations, getChatHistory,
+  getConversations, getChatHistory, renameConversation, deleteConversation,
 } from '../services/api'
 import type {
   Repository,
@@ -1161,1216 +1164,255 @@ const SUGGESTED_QUESTIONS = [
 // ============================================================
 
 export default function Chat() {
-  const [repos, setRepos] =
-    useState<Repository[]>([])
+  const [repos, setRepos] = useState<Repository[]>([])
+  const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null)
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [selectedConv, setSelectedConv] = useState<string | null>(null)
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [loadingList, setLoadingList] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [editing, setEditing] = useState<Conversation | null>(null)
+  const [title, setTitle] = useState('')
+  const [deleting, setDeleting] = useState<Conversation | null>(null)
+  const [mutating, setMutating] = useState(false)
+  const [actionError, setActionError] = useState('')
+  const selection = useRef(0)
+  const listRequest = useRef(0)
+  const stream = useRef<AbortController | null>(null)
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  const [selectedRepo, setSelectedRepo] =
-    useState<Repository | null>(null)
-
-  const [conversations, setConversations] =
-    useState<Conversation[]>([])
-
-  const [selectedConv, setSelectedConv] =
-    useState<string | null>(null)
-
-  const [messages, setMessages] =
-    useState<ChatMessage[]>([])
-
-  const [input, setInput] =
-    useState('')
-
-  const [loading, setLoading] =
-    useState(false)
-
-  const [loadingHistory, setLoadingHistory] =
-    useState(false)
-
-  const messagesEndRef =
-    useRef<HTMLDivElement>(null)
-
-  const inputRef =
-    useRef<HTMLTextAreaElement>(null)
-
-
-  // ==========================================================
-  // EFFECTS
-  // ==========================================================
+  function changeSelection() {
+    stream.current?.abort()
+    clearTimeout(pollTimer.current)
+    selection.current += 1
+    setLoading(false); setLoadingHistory(false); setLoadingList(false)
+    setError(''); setSaved(false); setInput(''); setEditing(null); setDeleting(null)
+    return selection.current
+  }
 
   useEffect(() => {
-    loadRepos()
+    let active = true
+    void getRepositories().then(res => {
+      if (!active) return
+      const ready = res.data.filter((repo: Repository) => repo.status === 'READY')
+      setRepos(ready)
+      if (ready.length) void selectRepo(ready[0])
+    }).catch(() => { if (active) setError('Unable to load repositories. Refresh the page to retry.') })
+    return () => {
+      active = false; selection.current += 1
+      stream.current?.abort(); clearTimeout(pollTimer.current)
+    }
   }, [])
 
-  useEffect(() => {
-    scrollToBottom()
-  }, [messages, loading])
+  useEffect(() => { messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' }) }, [messages, loading])
 
+  async function refreshConversations(repoId: string, version: number) {
+    const request = ++listRequest.current
+    const { data } = await getConversations(repoId)
+    if (selection.current === version && listRequest.current === request) setConversations(data)
+    return data as Conversation[]
+  }
 
-  // ==========================================================
-  // LOAD REPOSITORIES
-  // ==========================================================
-
-  async function loadRepos() {
+  async function readConversation(convId: string, repoId: string, version: number) {
+    const request = ++listRequest.current
     try {
-      const res =
-        await getRepositories()
-
-      const ready =
-        res.data.filter(
-          (r: Repository) =>
-            r.status === 'READY'
-        )
-
-      setRepos(ready)
-
-      if (ready.length > 0) {
-        selectRepo(ready[0])
+      const [history, list] = await Promise.all([getChatHistory(convId), getConversations(repoId)])
+      if (selection.current !== version) return
+      setMessages(history.data)
+      if (listRequest.current === request) setConversations(list.data)
+      const pending = list.data.some((c: Conversation) => c.id === convId && c.is_generating)
+      setLoading(pending); setLoadingHistory(false); setSaved(!pending)
+      if (pending) pollTimer.current = setTimeout(() => void readConversation(convId, repoId, version), 2000)
+    } catch {
+      if (selection.current === version) {
+        setLoadingHistory(false); setLoading(false)
+        setError('Unable to load saved messages. Reopen the conversation to retry.')
       }
-    } catch (err) {
-      console.error(err)
     }
   }
 
-
-  // ==========================================================
-  // SELECT REPOSITORY
-  // ==========================================================
-
-  async function selectRepo(
-    repo: Repository
-  ) {
-    setSelectedRepo(repo)
-    setMessages([])
-    setSelectedConv(null)
-
+  async function selectRepo(repo: Repository) {
+    const version = changeSelection()
+    setSelectedRepo(repo); setSelectedConv(null); setMessages([]); setConversations([]); setLoadingList(true)
     try {
-      const res =
-        await getConversations(
-          repo.id
-        )
-
-      setConversations(
-        res.data
-      )
-    } catch (err) {
-      console.error(err)
-    }
-  }
-
-
-  // ==========================================================
-  // SELECT CONVERSATION
-  // ==========================================================
-
-  async function selectConversation(
-    convId: string
-  ) {
-    setSelectedConv(convId)
-    setLoadingHistory(true)
-
-    try {
-      const res =
-        await getChatHistory(
-          convId
-        )
-
-      const msgs: ChatMessage[] =
-        res.data.map(
-          (m: any) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            sources:
-              m.sources || [],
-            created_at:
-              m.created_at,
-          })
-        )
-
-      setMessages(msgs)
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setLoadingHistory(false)
-    }
-  }
-
-
-  // ==========================================================
-  // SEND MESSAGE
-  // ==========================================================
-
-    async function handleSend(text?: string) {
-    const question = text || input.trim()
-    if (!question || !selectedRepo || loading) return
-
-    setInput('')
-    setLoading(true)
-
-    // Add user message immediately
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: question,
-      created_at: new Date().toISOString()
-    }
-    setMessages(prev => [...prev, userMsg])
-
-    // Add empty assistant message for streaming
-    const streamingId = (Date.now() + 1).toString()
-    const streamingMsg: ChatMessage = {
-      id: streamingId,
-      role: 'assistant',
-      content: '',
-      sources: [],
-      created_at: new Date().toISOString()
-    }
-    setMessages(prev => [...prev, streamingMsg])
-
-    let fullContent = ''
-    let convId = selectedConv
-
-    await sendMessageStream(
-      selectedRepo.id,
-      question,
-      selectedConv || undefined,
-
-      // onToken — append each token
-      (token: string) => {
-        fullContent += token
-        setMessages(prev => prev.map(m =>
-          m.id === streamingId
-            ? { ...m, content: fullContent }
-            : m
-        ))
-      },
-
-      // onSources — set sources when done
-      (sources: any[]) => {
-        setMessages(prev => prev.map(m =>
-          m.id === streamingId
-            ? { ...m, sources }
-            : m
-        ))
-      },
-
-      // onMeta — get conversation id
-      (meta: any) => {
-        if (meta.conversation_id && !convId) {
-          convId = meta.conversation_id
-          setSelectedConv(meta.conversation_id)
-          getConversations(selectedRepo.id)
-            .then(res => setConversations(res.data))
-        }
-      },
-
-      // onDone
-      () => {
-        setLoading(false)
-        inputRef.current?.focus()
-      },
-
-            // onError
-      (_err: string) => {
-        setMessages(prev => prev.map(m =>
-          m.id === streamingId
-            ? { ...m, content: '⚠️ Something went wrong. Please try again.' }
-            : m
-        ))
-        setLoading(false)
+      const list = await refreshConversations(repo.id, version)
+      if (selection.current !== version) return
+      if (list.length) {
+        setSelectedConv(list[0].id); setLoadingHistory(true)
+        await readConversation(list[0].id, repo.id, version)
       }
-    )
+    } catch {
+      if (selection.current === version) setError('Unable to load conversations. Select the repository again to retry.')
+    } finally { if (selection.current === version) setLoadingList(false) }
   }
 
-
-  // ==========================================================
-  // SCROLL TO BOTTOM
-  // ==========================================================
-
-  function scrollToBottom() {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: 'smooth',
-    })
+  function selectConversation(convId: string) {
+    if (!selectedRepo) return
+    const version = changeSelection()
+    setSelectedConv(convId); setMessages([]); setLoadingHistory(true)
+    void readConversation(convId, selectedRepo.id, version)
   }
-
-
-  // ==========================================================
-  // KEYBOARD HANDLER
-  // ==========================================================
-
-  function handleKeyDown(
-    e: React.KeyboardEvent
-  ) {
-    if (
-      e.key === 'Enter' &&
-      !e.shiftKey
-    ) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-
-  // ==========================================================
-  // START NEW CHAT
-  // ==========================================================
 
   function startNewChat() {
-    setSelectedConv(null)
-    setMessages([])
+    changeSelection(); setSelectedConv(null); setMessages([])
     inputRef.current?.focus()
   }
 
+  async function handleSend(text?: string) {
+    const question = (text || input).trim()
+    if (!question || !selectedRepo || loading || loadingHistory || loadingList || mutating) return
+    const version = selection.current
+    const repoId = selectedRepo.id
+    const controller = new AbortController()
+    stream.current = controller
+    const active = () => selection.current === version && !controller.signal.aborted
+    setInput(''); setLoading(true); setError(''); setSaved(false)
+    let convId = selectedConv
+    let complete = false
+    let failure = ''
+    const assistantId = crypto.randomUUID()
+    setMessages(prev => [...prev,
+      { id: crypto.randomUUID(), role: 'user', content: question, created_at: new Date().toISOString() },
+      { id: assistantId, role: 'assistant', content: '', sources: [], created_at: new Date().toISOString() },
+    ])
+    let content = ''
+    await sendMessageStream(repoId, question, convId || undefined,
+      token => {
+        if (!active()) return
+        content += token
+        setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content } : m))
+      },
+      sources => { if (active()) setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, sources } : m)) },
+      meta => {
+        if (!active()) return
+        convId = meta.conversation_id; setSelectedConv(convId)
+        void refreshConversations(repoId, version).catch(() => {})
+      },
+      () => { complete = true },
+      message => { failure = message },
+      controller.signal,
+    )
+    if (!active()) return
+    setSaved(complete)
+    if (failure) {
+      setError(failure)
+      // Partial streamed text is not a completed, saved answer.
+      setMessages(prev => prev.filter(m => m.id !== assistantId))
+    }
+    try {
+      await refreshConversations(repoId, version)
+      if (convId) {
+        const history = await getChatHistory(convId)
+        if (active()) { setMessages(history.data); setSaved(true) }
+      }
+    } catch { if (active()) setError('Unable to refresh saved history. Reopen the conversation to check it.') }
+    if (active()) { setLoading(false); inputRef.current?.focus() }
+  }
 
-  // ==========================================================
-  // RENDER
-  // ==========================================================
+  async function saveTitle() {
+    if (!editing || !title.trim() || !selectedRepo) return
+    const version = selection.current
+    setMutating(true); setActionError('')
+    try {
+      await renameConversation(editing.id, title.trim())
+      await refreshConversations(selectedRepo.id, version)
+      if (selection.current === version) setEditing(null)
+    } catch { if (selection.current === version) setActionError('Unable to rename this conversation. Please try again.') }
+    finally { setMutating(false) }
+  }
 
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection:
-          'column',
-        height: '100%',
-      }}
-    >
-      <TopBar
-        title="AI Chat"
-        subtitle="Ask questions about your codebase"
-      />
+  async function removeConversation() {
+    if (!deleting || !selectedRepo) return
+    const version = selection.current
+    const convId = deleting.id
+    setMutating(true); setActionError('')
+    try {
+      await deleteConversation(convId)
+      const list = await refreshConversations(selectedRepo.id, version)
+      if (selection.current !== version) return
+      setDeleting(null)
+      if (convId === selectedConv) {
+        if (list.length) selectConversation(list[0].id)
+        else startNewChat()
+      }
+    } catch { if (selection.current === version) setActionError('Unable to delete. If a reply is running, wait for it to finish and try again.') }
+    finally { setMutating(false) }
+  }
 
-      <div
-        style={{
-          display: 'flex',
-          flex: 1,
-          overflow: 'hidden',
-        }}
-      >
-
-        {/* ====================================================
-            LEFT SIDEBAR
-        ==================================================== */}
-
-        <div
-          style={{
-            width: '240px',
-            minWidth: '240px',
-            borderRight:
-              '1px solid var(--border)',
-            display: 'flex',
-            flexDirection:
-              'column',
-            background:
-              'var(--bg-surface)',
-            overflow: 'hidden',
-          }}
-        >
-
-          {/* Repository selector */}
-          <div
-            style={{
-              padding: '12px',
-              borderBottom:
-                '1px solid var(--border)',
-            }}
-          >
-            <div
-              style={{
-                fontSize: '10px',
-                color:
-                  'var(--text-muted)',
-                textTransform:
-                  'uppercase',
-                letterSpacing:
-                  '0.05em',
-                marginBottom:
-                  '8px',
-                fontWeight:
-                  '600',
-              }}
-            >
-              Repository
+  const current = conversations.find(c => c.id === selectedConv)
+  const unanswered = saved && selectedConv && !loading && !loadingHistory && messages.at(-1)?.role === 'user'
+  return <div className="chat-page">
+    <TopBar title="AI Chat" subtitle="Private conversations, saved with your repositories" />
+    <div className="chat-layout">
+      <aside className="chat-sidebar" aria-label="Chat history">
+        <label className="chat-label" htmlFor="chat-repository">Repository</label>
+        <select id="chat-repository" value={selectedRepo?.id || ''} disabled={mutating}
+          onChange={e => { const repo = repos.find(r => r.id === e.target.value); if (repo) void selectRepo(repo) }}>
+          {!repos.length && <option value="">No ready repositories</option>}
+          {repos.map(repo => <option key={repo.id} value={repo.id}>{repo.name}</option>)}
+        </select>
+        <button className="chat-new" onClick={startNewChat} disabled={!selectedRepo || loadingList || mutating}><Plus size={15} /> New conversation</button>
+        <div className="chat-label">Saved conversations</div>
+        {loadingList ? <p role="status">Loading history…</p> : conversations.length === 0 && <p className="chat-muted">Your conversations will appear here after your first question.</p>}
+        <div className="conversation-list">
+          {conversations.map(conv => <div className={`conversation-row ${selectedConv === conv.id ? 'selected' : ''}`} key={conv.id}>
+            <button className="conversation-open" disabled={mutating} onClick={() => selectConversation(conv.id)} aria-pressed={selectedConv === conv.id}>
+              <MessageSquare size={14} /><span><strong>{conv.title || 'Conversation'}</strong><small>{conv.is_generating ? 'Reply in progress…' : new Date(conv.updated_at || conv.created_at).toLocaleDateString()}</small></span>
+            </button>
+            <div className="conversation-actions">
+              <button aria-label={`Rename ${conv.title || 'conversation'}`} title="Rename" disabled={mutating} onClick={() => { setEditing(conv); setTitle(conv.title || ''); setActionError('') }}><Pencil size={13} /></button>
+              <button aria-label={`Delete ${conv.title || 'conversation'}`} title="Delete" disabled={mutating || conv.is_generating || (loading && selectedConv === conv.id)} onClick={() => { setDeleting(conv); setActionError('') }}><Trash2 size={13} /></button>
             </div>
-
-            {repos.length === 0 ? (
-              <div
-                style={{
-                  fontSize: '12px',
-                  color:
-                    'var(--text-muted)',
-                }}
-              >
-                No ready repositories
-              </div>
-            ) : (
-              <div
-                style={{
-                  display:
-                    'flex',
-                  flexDirection:
-                    'column',
-                  gap: '4px',
-                }}
-              >
-                {repos.map(
-                  repo => (
-                    <button
-                      key={repo.id}
-                      onClick={() =>
-                        selectRepo(
-                          repo
-                        )
-                      }
-                      style={{
-                        display:
-                          'flex',
-                        alignItems:
-                          'center',
-                        gap: '8px',
-                        padding:
-                          '8px 10px',
-                        borderRadius:
-                          '6px',
-                        border:
-                          'none',
-                        cursor:
-                          'pointer',
-                        textAlign:
-                          'left',
-                        width:
-                          '100%',
-                        background:
-                          selectedRepo?.id ===
-                          repo.id
-                            ? 'var(--primary-glow)'
-                            : 'transparent',
-                        color:
-                          selectedRepo?.id ===
-                          repo.id
-                            ? 'var(--primary)'
-                            : 'var(--text-muted)',
-                        transition:
-                          'all 0.15s',
-                        fontSize:
-                          '12px',
-                        fontWeight:
-                          '500',
-                      }}
-                      onMouseEnter={e => {
-                        if (
-                          selectedRepo?.id !==
-                          repo.id
-                        ) {
-                          e.currentTarget.style.background =
-                            'var(--bg-elevated)'
-                        }
-                      }}
-                      onMouseLeave={e => {
-                        if (
-                          selectedRepo?.id !==
-                          repo.id
-                        ) {
-                          e.currentTarget.style.background =
-                            'transparent'
-                        }
-                      }}
-                    >
-                      <GitBranch
-                        size={13}
-                      />
-
-                      <span
-                        style={{
-                          overflow:
-                            'hidden',
-                          textOverflow:
-                            'ellipsis',
-                          whiteSpace:
-                            'nowrap',
-                        }}
-                      >
-                        {repo.name}
-                      </span>
-                    </button>
-                  )
-                )}
-              </div>
-            )}
-          </div>
-
-
-          {/* Conversations */}
-          <div
-            style={{
-              flex: 1,
-              overflow: 'auto',
-              padding: '12px',
-            }}
-          >
-            <div
-              style={{
-                display:
-                  'flex',
-                alignItems:
-                  'center',
-                justifyContent:
-                  'space-between',
-                marginBottom:
-                  '8px',
-              }}
-            >
-              <div
-                style={{
-                  fontSize:
-                    '10px',
-                  color:
-                    'var(--text-muted)',
-                  textTransform:
-                    'uppercase',
-                  letterSpacing:
-                    '0.05em',
-                  fontWeight:
-                    '600',
-                }}
-              >
-                Conversations
-              </div>
-
-              <button
-                onClick={
-                  startNewChat
-                }
-                style={{
-                  background:
-                    'none',
-                  border:
-                    'none',
-                  cursor:
-                    'pointer',
-                  color:
-                    'var(--text-muted)',
-                  padding:
-                    '2px',
-                  borderRadius:
-                    '4px',
-                  display:
-                    'flex',
-                  alignItems:
-                    'center',
-                }}
-                onMouseEnter={e =>
-                  e.currentTarget.style.color =
-                    'var(--primary)'
-                }
-                onMouseLeave={e =>
-                  e.currentTarget.style.color =
-                    'var(--text-muted)'
-                }
-                title="New conversation"
-              >
-                <Plus size={13} />
-              </button>
-            </div>
-
-
-            {conversations.length ===
-            0 ? (
-              <div
-                style={{
-                  fontSize:
-                    '11px',
-                  color:
-                    'var(--text-muted)',
-                  textAlign:
-                    'center',
-                  padding:
-                    '16px 0',
-                }}
-              >
-                No conversations yet
-              </div>
-            ) : (
-              <div
-                style={{
-                  display:
-                    'flex',
-                  flexDirection:
-                    'column',
-                  gap: '2px',
-                }}
-              >
-                {conversations.map(
-                  conv => (
-                    <button
-                      key={conv.id}
-                      onClick={() =>
-                        selectConversation(
-                          conv.id
-                        )
-                      }
-                      style={{
-                        display:
-                          'flex',
-                        alignItems:
-                          'center',
-                        gap: '8px',
-                        padding:
-                          '8px 10px',
-                        borderRadius:
-                          '6px',
-                        border:
-                          'none',
-                        cursor:
-                          'pointer',
-                        textAlign:
-                          'left',
-                        width:
-                          '100%',
-                        background:
-                          selectedConv ===
-                          conv.id
-                            ? 'var(--primary-glow)'
-                            : 'transparent',
-                        color:
-                          selectedConv ===
-                          conv.id
-                            ? 'var(--primary)'
-                            : 'var(--text-muted)',
-                        transition:
-                          'all 0.15s',
-                        fontSize:
-                          '12px',
-                      }}
-                      onMouseEnter={e => {
-                        if (
-                          selectedConv !==
-                          conv.id
-                        ) {
-                          e.currentTarget.style.background =
-                            'var(--bg-elevated)'
-                        }
-                      }}
-                      onMouseLeave={e => {
-                        if (
-                          selectedConv !==
-                          conv.id
-                        ) {
-                          e.currentTarget.style.background =
-                            'transparent'
-                        }
-                      }}
-                    >
-                      <Clock
-                        size={11}
-                        style={{
-                          flexShrink:
-                            0,
-                        }}
-                      />
-
-                      <span
-                        style={{
-                          overflow:
-                            'hidden',
-                          textOverflow:
-                            'ellipsis',
-                          whiteSpace:
-                            'nowrap',
-                          fontSize:
-                            '11px',
-                        }}
-                      >
-                        {conv.title ||
-                          'Conversation'}
-                      </span>
-                    </button>
-                  )
-                )}
-              </div>
-            )}
-          </div>
+          </div>)}
         </div>
-
-
-        {/* ====================================================
-            MAIN CHAT AREA
-        ==================================================== */}
-
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection:
-              'column',
-            overflow: 'hidden',
-            minWidth: 0,
-          }}
-        >
-
-          {/* No repository selected */}
-          {!selectedRepo && (
-            <div
-              style={{
-                flex: 1,
-                display:
-                  'flex',
-                flexDirection:
-                  'column',
-                alignItems:
-                  'center',
-                justifyContent:
-                  'center',
-                color:
-                  'var(--text-muted)',
-              }}
-            >
-              <Bot
-                size={48}
-                style={{
-                  marginBottom:
-                    '16px',
-                  opacity: 0.3,
-                }}
-              />
-
-              <p
-                style={{
-                  fontSize:
-                    '14px',
-                }}
-              >
-                Select a repository
-                to start chatting
-              </p>
-            </div>
-          )}
-
-
-          {/* Chat interface */}
-          {selectedRepo && (
-            <>
-              {/* ==================================================
-                  REPOSITORY INDICATOR
-              ================================================== */}
-
-              <div
-                style={{
-                  padding:
-                    '10px 20px',
-                  borderBottom:
-                    '1px solid var(--border)',
-                  display:
-                    'flex',
-                  alignItems:
-                    'center',
-                  gap: '8px',
-                  background:
-                    'var(--bg-surface)',
-                }}
-              >
-                <div
-                  style={{
-                    width: '20px',
-                    height: '20px',
-                    borderRadius:
-                      '5px',
-                    background:
-                      'linear-gradient(135deg, #6366f1, #a855f7)',
-                    display:
-                      'flex',
-                    alignItems:
-                      'center',
-                    justifyContent:
-                      'center',
-                  }}
-                >
-                  <GitBranch
-                    size={11}
-                    color="white"
-                  />
-                </div>
-
-                <span
-                  style={{
-                    fontSize:
-                      '12px',
-                    fontWeight:
-                      '600',
-                  }}
-                >
-                  {
-                    selectedRepo.name
-                  }
-                </span>
-
-                <span
-                  style={{
-                    fontSize:
-                      '11px',
-                    color:
-                      'var(--text-muted)',
-                  }}
-                >
-                  ·{' '}
-                  {
-                    selectedRepo.total_files
-                  }{' '}
-                  files ·{' '}
-                  {
-                    selectedRepo.total_chunks
-                  }{' '}
-                  chunks
-                </span>
-              </div>
-
-
-              {/* ==================================================
-                  MESSAGES
-              ================================================== */}
-
-              <div
-                style={{
-                  flex: 1,
-                  overflow: 'auto',
-                  padding: '24px',
-                  minWidth: 0,
-                }}
-              >
-
-                {/* Welcome state */}
-                {messages.length ===
-                  0 &&
-                  !loadingHistory && (
-                    <div
-                      className="animate-fade-in"
-                      style={{
-                        display:
-                          'flex',
-                        flexDirection:
-                          'column',
-                        alignItems:
-                          'center',
-                        justifyContent:
-                          'center',
-                        minHeight:
-                          '60%',
-                        textAlign:
-                          'center',
-                        padding:
-                          '40px',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width:
-                            '56px',
-                          height:
-                            '56px',
-                          borderRadius:
-                            '14px',
-                          background:
-                            'linear-gradient(135deg, #6366f1, #a855f7)',
-                          display:
-                            'flex',
-                          alignItems:
-                            'center',
-                          justifyContent:
-                            'center',
-                          marginBottom:
-                            '16px',
-                          boxShadow:
-                            '0 0 30px rgba(99,102,241,0.3)',
-                        }}
-                      >
-                        <Zap
-                          size={24}
-                          color="white"
-                        />
-                      </div>
-
-                      <h3
-                        style={{
-                          fontSize:
-                            '16px',
-                          fontWeight:
-                            '700',
-                          marginBottom:
-                            '8px',
-                        }}
-                      >
-                        Ask anything
-                        about{' '}
-                        <span
-                          style={{
-                            background:
-                              'linear-gradient(135deg, #6366f1, #a855f7)',
-                            WebkitBackgroundClip:
-                              'text',
-                            WebkitTextFillColor:
-                              'transparent',
-                          }}
-                        >
-                          {
-                            selectedRepo.name
-                          }
-                        </span>
-                      </h3>
-
-                      <p
-                        style={{
-                          color:
-                            'var(--text-muted)',
-                          fontSize:
-                            '13px',
-                          marginBottom:
-                            '24px',
-                          maxWidth:
-                            '400px',
-                        }}
-                      >
-                        I have indexed{' '}
-                        {
-                          selectedRepo.total_chunks
-                        }{' '}
-                        code chunks.
-                        Ask me about
-                        architecture,
-                        functions,
-                        security, or
-                        anything else.
-                      </p>
-
-
-                      {/* Suggested questions */}
-                      <div
-                        style={{
-                          display:
-                            'grid',
-                          gridTemplateColumns:
-                            '1fr 1fr',
-                          gap: '8px',
-                          maxWidth:
-                            '520px',
-                          width:
-                            '100%',
-                        }}
-                      >
-                        {SUGGESTED_QUESTIONS.map(
-                          q => (
-                            <button
-                              key={q}
-                              onClick={() =>
-                                handleSend(
-                                  q
-                                )
-                              }
-                              style={{
-                                padding:
-                                  '10px 14px',
-                                borderRadius:
-                                  '8px',
-                                border:
-                                  '1px solid var(--border-bright)',
-                                background:
-                                  'var(--bg-surface)',
-                                color:
-                                  'var(--text)',
-                                cursor:
-                                  'pointer',
-                                fontSize:
-                                  '12px',
-                                textAlign:
-                                  'left',
-                                transition:
-                                  'all 0.15s',
-                                lineHeight:
-                                  '1.4',
-                              }}
-                              onMouseEnter={e => {
-                                e.currentTarget.style.borderColor =
-                                  'var(--primary)'
-
-                                e.currentTarget.style.background =
-                                  'var(--primary-glow)'
-                              }}
-                              onMouseLeave={e => {
-                                e.currentTarget.style.borderColor =
-                                  'var(--border-bright)'
-
-                                e.currentTarget.style.background =
-                                  'var(--bg-surface)'
-                              }}
-                            >
-                              <MessageSquare
-                                size={
-                                  11
-                                }
-                                color="var(--primary)"
-                                style={{
-                                  marginBottom:
-                                    '4px',
-                                  display:
-                                    'block',
-                                }}
-                              />
-
-                              {q}
-                            </button>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-
-                {/* Loading history */}
-                {loadingHistory && (
-                  <div
-                    style={{
-                      display:
-                        'flex',
-                      justifyContent:
-                        'center',
-                      padding:
-                        '40px',
-                    }}
-                  >
-                    <Loader
-                      size={20}
-                      color="var(--primary)"
-                      style={{
-                        animation:
-                          'spin 1s linear infinite',
-                      }}
-                    />
-                  </div>
-                )}
-
-
-                {/* Messages */}
-                {messages.map(
-                  msg => (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg}
-                    />
-                  )
-                )}
-
-
-                {/* Typing indicator */}
-                {loading && (
-                  <TypingIndicator />
-                )}
-
-                <div
-                  ref={
-                    messagesEndRef
-                  }
-                />
-              </div>
-
-
-              {/* ==================================================
-                  INPUT AREA
-              ================================================== */}
-
-              <div
-                style={{
-                  padding:
-                    '16px 20px',
-                  borderTop:
-                    '1px solid var(--border)',
-                  background:
-                    'var(--bg-surface)',
-                }}
-              >
-                <div
-                  style={{
-                    display:
-                      'flex',
-                    gap: '10px',
-                    alignItems:
-                      'flex-end',
-                    background:
-                      'var(--bg-elevated)',
-                    border:
-                      '1px solid var(--border-bright)',
-                    borderRadius:
-                      '12px',
-                    padding:
-                      '10px 14px',
-                    transition:
-                      'border-color 0.2s',
-                  }}
-                >
-                  <textarea
-                    ref={
-                      inputRef
-                    }
-                    value={input}
-                    onChange={e =>
-                      setInput(
-                        e.target
-                          .value
-                      )
-                    }
-                    onKeyDown={
-                      handleKeyDown
-                    }
-                    placeholder="Ask about the codebase... (Enter to send, Shift+Enter for new line)"
-                    rows={1}
-                    style={{
-                      flex: 1,
-                      background:
-                        'none',
-                      border:
-                        'none',
-                      color:
-                        'var(--text)',
-                      fontSize:
-                        '13px',
-                      outline:
-                        'none',
-                      resize:
-                        'none',
-                      fontFamily:
-                        'Inter, sans-serif',
-                      lineHeight:
-                        '1.5',
-                      maxHeight:
-                        '120px',
-                      overflowY:
-                        'auto',
-                    }}
-                    onInput={e => {
-                      const t =
-                        e.target as HTMLTextAreaElement
-
-                      t.style.height =
-                        'auto'
-
-                      t.style.height =
-                        Math.min(
-                          t.scrollHeight,
-                          120
-                        ) + 'px'
-                    }}
-                  />
-
-                  <button
-                    onClick={() =>
-                      handleSend()
-                    }
-                    disabled={
-                      !input.trim() ||
-                      loading
-                    }
-                    style={{
-                      width:
-                        '32px',
-                      height:
-                        '32px',
-                      borderRadius:
-                        '8px',
-                      border:
-                        'none',
-                      cursor:
-                        input.trim() &&
-                        !loading
-                          ? 'pointer'
-                          : 'not-allowed',
-                      background:
-                        input.trim() &&
-                        !loading
-                          ? 'linear-gradient(135deg, #6366f1, #7c3aed)'
-                          : 'var(--border)',
-                      display:
-                        'flex',
-                      alignItems:
-                        'center',
-                      justifyContent:
-                        'center',
-                      transition:
-                        'all 0.2s',
-                      flexShrink:
-                        0,
-                      boxShadow:
-                        input.trim() &&
-                        !loading
-                          ? '0 0 12px rgba(99,102,241,0.4)'
-                          : 'none',
-                    }}
-                  >
-                    {loading ? (
-                      <Loader
-                        size={14}
-                        color="white"
-                        style={{
-                          animation:
-                            'spin 1s linear infinite',
-                        }}
-                      />
-                    ) : (
-                      <Send
-                        size={14}
-                        color="white"
-                      />
-                    )}
-                  </button>
-                </div>
-
-                <div
-                  style={{
-                    fontSize:
-                      '10px',
-                    color:
-                      'var(--text-muted)',
-                    textAlign:
-                      'center',
-                    marginTop:
-                      '8px',
-                  }}
-                >
-                  Answers are grounded
-                  in your codebase ·
-                  Sources shown with
-                  every response
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-
-      {/* ========================================================
-          ANIMATIONS
-      ======================================================== */}
-
-      <style>{`
-        @keyframes bounce {
-          0%, 80%, 100% {
-            transform: scale(0.8);
-            opacity: 0.5;
-          }
-
-          40% {
-            transform: scale(1.2);
-            opacity: 1;
-          }
-        }
-
-        @keyframes spin {
-          from {
-            transform: rotate(0deg);
-          }
-
-          to {
-            transform: rotate(360deg);
-          }
-        }
-      `}</style>
+        <p className="chat-history-note">Saved to your account. Reopen a conversation on any device.</p>
+      </aside>
+      <section className="chat-main" aria-label="Conversation">
+        {error && <p className="chat-error" role="alert">{error}</p>}
+        {!selectedRepo ? <div className="chat-empty"><Bot size={40} /><h2>Select a repository to start chatting</h2><p>Analyze a repository first, then return here to ask questions.</p></div> : <>
+          <header className="chat-heading"><div><GitBranch size={16} /><span>{selectedRepo.name}<small>{current?.title || 'New conversation'}</small></span></div>
+            <span className="chat-save-state" role="status">{loading ? 'Generating reply…' : loadingHistory ? 'Loading…' : saved ? <><Check size={13} /> Saved</> : 'Private chat'}</span>
+          </header>
+          <div className="chat-messages">
+            {!messages.length && !loadingHistory && !loadingList && <div className="chat-empty"><Zap size={32} /><h2>Ask about {selectedRepo.name}</h2><p>Explore its architecture, trace a function, or find your next improvement.</p>
+              <div className="chat-suggestions">{SUGGESTED_QUESTIONS.map(question => <button key={question} disabled={loading || mutating} onClick={() => void handleSend(question)}>{question}</button>)}</div>
+            </div>}
+            {loadingHistory && <p role="status">Loading saved messages…</p>}
+            {messages.map(message => <MessageBubble key={message.id} message={message} />)}
+            {loading && <TypingIndicator />}
+            {unanswered && <div className="chat-unanswered">Your question is saved, but there is no completed reply. <button onClick={() => { setInput(messages.at(-1)!.content); inputRef.current?.focus() }}>Use this question again</button></div>}
+            <div ref={messagesEndRef} />
+          </div>
+          <form className="chat-composer" onSubmit={e => { e.preventDefault(); void handleSend() }}>
+            <div><textarea ref={inputRef} aria-label="Question" placeholder="Ask about your code…" value={input} maxLength={12000} rows={2}
+              disabled={loadingHistory || loadingList || mutating} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void handleSend() } }} />
+              <button type="submit" aria-label="Send question" disabled={!input.trim() || loading || loadingHistory || loadingList || mutating}><Send size={17} /></button></div>
+            <small>Enter to send · Shift + Enter for a new line · Completed replies are saved automatically</small>
+          </form>
+        </>}
+      </section>
     </div>
-  )
+    {(editing || deleting) && <div className="chat-modal-backdrop"><section className="chat-modal" role="dialog" aria-modal="true" aria-labelledby="chat-dialog-title" onKeyDown={e => {
+      if (e.key === 'Escape' && !mutating) { setEditing(null); setDeleting(null) }
+      if (e.key === 'Tab') {
+        const controls = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)'))
+        const first = controls[0], last = controls.at(-1)
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus() }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus() }
+      }
+    }}>
+      <button className="chat-modal-close" aria-label="Close dialog" disabled={mutating} onClick={() => { setEditing(null); setDeleting(null) }}><X size={18} /></button>
+      <h2 id="chat-dialog-title">{editing ? 'Rename conversation' : 'Delete conversation?'}</h2>
+      {editing ? <form onSubmit={e => { e.preventDefault(); void saveTitle() }}><label htmlFor="conversation-title">Title</label><input id="conversation-title" autoFocus maxLength={120} required value={title} disabled={mutating} onChange={e => setTitle(e.target.value)} /><button className="btn-primary" disabled={mutating || !title.trim()}>{mutating ? 'Saving…' : 'Save title'}</button></form>
+        : <><p>“{deleting?.title || 'Conversation'}” and its saved messages will be permanently deleted. Your repository and other conversations will remain.</p><button autoFocus className="btn-secondary" disabled={mutating} onClick={() => setDeleting(null)}>Keep conversation</button><button className="chat-delete-confirm" disabled={mutating} onClick={() => void removeConversation()}>{mutating ? 'Deleting…' : 'Delete permanently'}</button></>}
+      {actionError && <p className="chat-error" role="alert">{actionError}</p>}
+    </section></div>}
+  </div>
 }

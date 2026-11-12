@@ -1,12 +1,30 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 class ChatRequest(BaseModel):
     repository_id: str
-    question: str
+    question: str = Field(min_length=1, max_length=12000)
     conversation_id: Optional[str] = None
     stream: bool = False
+
+    @field_validator('question')
+    @classmethod
+    def nonempty_question(cls, value):
+        if not value.strip():
+            raise ValueError('Enter a question')
+        return value.strip()
+
+
+class ConversationUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+
+    @field_validator('title')
+    @classmethod
+    def nonempty_title(cls, value):
+        if not value.strip():
+            raise ValueError('Enter a conversation title')
+        return value.strip()
 
 class SourceReference(BaseModel):
     file_path: str

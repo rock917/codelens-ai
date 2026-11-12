@@ -65,7 +65,7 @@ export const sendMessage = (
   conversation_id: conversationId,
 })
 
-export const sendMessageStream = (
+export const sendMessageStream = async (
   repositoryId: string,
   question: string,
   conversationId?: string,
@@ -73,52 +73,67 @@ export const sendMessageStream = (
   onSources: (sources: any[]) => void = () => {},
   onMeta: (meta: any) => void = () => {},
   onDone: () => void = () => {},
-  onError: (err: string) => void = () => {}
+  onError: (err: string) => void = () => {},
+  signal?: AbortSignal,
 ) => {
-    return getAccessToken().then(token => fetch(`${API_BASE_URL}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      repository_id: repositoryId,
-      question,
-      conversation_id: conversationId,
-      stream: true
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  try {
+    const token = await getAccessToken()
+    const res = await fetch(`${API_BASE_URL}/chat`, {
+      method: 'POST', signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ repository_id: repositoryId, question, conversation_id: conversationId, stream: true }),
     })
-  })).then(async res => {
-    if (!res.ok) throw new Error('Stream request failed')
-    const reader = res.body!.getReader()
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(typeof body.detail === 'string' ? body.detail : 'Unable to send your question. Please try again.')
+    }
+    if (!res.body) throw new Error('The reply stream is unavailable.')
+    reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-
-    while (true) {
+    let completed = false
+    function consume(line: string) {
+      if (!line.startsWith('data:')) return
+      const raw = line.slice(5).trim()
+      if (!raw) return
+      const data = JSON.parse(raw)
+      if (data.type === 'error') throw new Error(data.message || 'The reply failed.')
+      if (data.type === 'token') onToken(data.content)
+      else if (data.type === 'sources') onSources(data.sources)
+      else if (data.type === 'meta') onMeta(data)
+      else if (data.type === 'done') completed = true
+    }
+    while (!completed) {
       const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const data = line.slice(6).trim()
-        if (!data) continue
-
-        try {
-          const parsed = JSON.parse(data)
-          if (parsed.type === 'token') onToken(parsed.content)
-          else if (parsed.type === 'sources') onSources(parsed.sources)
-          else if (parsed.type === 'meta') onMeta(parsed)
-          else if (parsed.type === 'done') onDone()
-        } catch { }
+      for (const line of lines) consume(line)
+      if (done) {
+        if (buffer.trim()) consume(buffer)
+        break
       }
     }
-  }).catch(err => onError(err.message))
+    if (!completed) throw new Error('Connection interrupted before the reply was saved. Reopen the conversation to check its history.')
+    onDone()
+  } catch (err) {
+    if (!signal?.aborted) onError(err instanceof Error ? err.message : 'Unable to load the reply.')
+  } finally {
+    await reader?.cancel().catch(() => {})
+  }
 }
 export const getConversations = (repoId: string) =>
   api.get(`/chat/conversations/${repoId}`)
 
 export const getChatHistory = (conversationId: string) =>
   api.get(`/chat/history/${conversationId}`)
+
+export const renameConversation = (conversationId: string, title: string) =>
+  api.patch(`/chat/conversations/${conversationId}`, { title })
+
+export const deleteConversation = (conversationId: string) =>
+  api.delete(`/chat/conversations/${conversationId}`)
 
 // ── Analysis ─────────────────────────────────────────────────
 export const triggerAnalysis = (repoId: string) =>
