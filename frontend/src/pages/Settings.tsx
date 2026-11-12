@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { supabase } from '../auth/client'
 import { getDeletionStatus, deleteAccount } from '../services/api'
 import TopBar from '../components/layout/TopBar'
+import './settings.css'
 
 type DeletionStatus = { enabled: boolean; pending: boolean; recent_sign_in: boolean }
 
@@ -17,6 +18,12 @@ export default function Settings() {
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const emailMatches = Boolean(email.trim()) && email.trim().toLowerCase() === session?.user.email?.toLowerCase()
+  const confirmationHint = !emailMatches
+    ? 'Enter your account email in the field above to enable deletion.'
+    : confirmation !== 'DELETE'
+      ? 'Type DELETE exactly as shown to enable deletion.'
+      : 'Both confirmations match. Deleting your account is permanent.'
   useEffect(() => {
     let active = true
     void getDeletionStatus().then(({ data }) => { if (active) setStatus(data) })
@@ -67,7 +74,7 @@ export default function Settings() {
   }
   return <>
     <TopBar title="Settings" subtitle="Manage your CodeLens account" />
-    <div style={{ padding: 24, maxWidth: 760, width: '100%' }}>
+    <div className="account-settings" style={{ padding: 24, maxWidth: 760, width: '100%' }}>
       <section className="card" style={{ padding: 24 }} aria-labelledby="account-heading">
         <h2 id="account-heading">Your account</h2>
         <p style={{ overflowWrap: 'anywhere', marginTop: 12 }}>{session?.user.email}</p>
@@ -83,12 +90,13 @@ export default function Settings() {
             <button className="btn btn-secondary" style={{ marginTop: 16 }} disabled={busy} onClick={() => void signInAgain()}>Sign out and sign in again</button>
           </div> : !expanded ? <button className="btn btn-secondary" style={{ marginTop: 20 }} onClick={() => setExpanded(true)}>Delete my account…</button> : <form onSubmit={submit} style={{ marginTop: 20 }}>
             <label htmlFor="deletion-email">Confirm your account email</label>
-            <input id="deletion-email" type="email" autoComplete="email" required value={email} disabled={busy} onChange={event => setEmail(event.target.value)} style={{ display: 'block', width: '100%', margin: '8px 0 16px' }} />
+            <input id="deletion-email" className="deletion-input" type="email" placeholder="Enter your account email" autoComplete="email" aria-describedby="deletion-hint" required value={email} disabled={busy} onChange={event => setEmail(event.target.value)} />
             <label htmlFor="deletion-confirmation">Type DELETE to confirm</label>
-            <input id="deletion-confirmation" autoComplete="off" required value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} style={{ display: 'block', width: '100%', margin: '8px 0 16px' }} />
+            <input id="deletion-confirmation" className="deletion-input" placeholder="DELETE" autoComplete="off" aria-describedby="deletion-hint" required value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} />
+            <p id="deletion-hint" aria-live="polite" style={{ marginBottom: 16 }}>{confirmationHint}</p>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => { setExpanded(false); setEmail(''); setConfirmation(''); setError('') }}>Keep my account</button>
-              <button type="submit" className="btn btn-secondary" style={{ color: 'var(--danger, #ff869b)' }} disabled={busy || confirmation !== 'DELETE' || email.trim().toLowerCase() !== session?.user.email?.toLowerCase()}>{busy ? 'Deleting…' : 'Permanently delete my account'}</button>
+              <button type="submit" className="btn btn-secondary deletion-submit" aria-describedby="deletion-hint" disabled={busy || confirmation !== 'DELETE' || !emailMatches}>{busy ? 'Deleting…' : 'Permanently delete my account'}</button>
             </div>
           </form>}
         </>}
