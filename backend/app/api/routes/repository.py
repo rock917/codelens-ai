@@ -36,16 +36,22 @@ async def upload_zip(background_tasks: BackgroundTasks, file: UploadFile = File(
                      db: AsyncSession = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     if not file.filename or not file.filename.lower().endswith('.zip'):
         raise HTTPException(400, 'Only ZIP files are supported')
-    content = await file.read(settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024 + 1)
-    if len(content) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-        raise HTTPException(400, f'File too large. Max {settings.MAX_UPLOAD_SIZE_MB}MB')
-    revision = hashlib.sha256(content).hexdigest()
-    # Write before admission so filesystem errors never strand a reservation.
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    from app.services.archive_safety import ensure_disk_space
+    try:
+        ensure_disk_space(settings.UPLOAD_DIR)
+    except ValueError as exc:
+        raise HTTPException(503, str(exc))
     temp_path = os.path.join(settings.UPLOAD_DIR, f'temp_{uuid.uuid4()}.zip')
     try:
+        size, digest = 0, hashlib.sha256()
         with open(temp_path, 'wb') as output:
-            output.write(content)
+            while block := await file.read(1024 * 1024):
+                size += len(block)
+                if size > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                    raise HTTPException(413, f'File too large. Max {settings.MAX_UPLOAD_SIZE_MB}MB')
+                digest.update(block)
+                output.write(block)
+        revision = digest.hexdigest()
         repo, reused = await admit(db, user.id, file.filename[:-4], 'zip', 'zip:' + revision, revision)
         if not reused:
             background_tasks.add_task(run_zip_ingestion, repo.id, temp_path)

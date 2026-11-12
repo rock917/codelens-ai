@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from app.guards import RequestGuards
+from sqlalchemy import text
+import asyncio
 from app.database.base import init_db, recover_interrupted_jobs, engine
 from app.config.settings import settings
 from app.api.routes import (
@@ -30,12 +33,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.add_middleware(RequestGuards)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],
 )
 
 @app.middleware("http")
@@ -68,3 +73,18 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get('/ready', include_in_schema=False)
+async def ready():
+    from starlette.responses import JSONResponse
+    from app.services.archive_safety import ensure_disk_space
+    from app.database.base import AsyncSessionLocal
+    try:
+        async with asyncio.timeout(5):
+            async with AsyncSessionLocal() as db:
+                await db.execute(text('SELECT 1'))
+        ensure_disk_space(settings.UPLOAD_DIR)
+        return JSONResponse({'status': 'ready'}, headers={'Cache-Control': 'no-store'})
+    except Exception:
+        return JSONResponse({'status': 'unavailable'}, status_code=503, headers={'Cache-Control': 'no-store'})

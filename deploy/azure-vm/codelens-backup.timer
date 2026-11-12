@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry CodeLens backup hourly; create at most one per 24 hours
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+Unit=codelens-backup.service
+
+[Install]
+WantedBy=timers.target

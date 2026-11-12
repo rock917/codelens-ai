@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     RECOVER_INTERRUPTED_JOBS: bool = True
 
     # File Upload
+    RESOURCE_GUARDS_ENABLED: bool = True
+    MAX_REPOSITORY_FILES: int = 2000
+    MAX_EXTRACTED_SIZE_MB: int = 250
+    MIN_FREE_DISK_MB: int = 2048
     MAX_UPLOAD_SIZE_MB: int = 100
     UPLOAD_DIR: str = "./uploads"
 

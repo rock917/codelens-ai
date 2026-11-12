@@ -1,0 +1,12 @@
+[Unit]
+Description=CodeLens private database and repository backup
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/codelens/ops.py backup
+ExecStopPost=/usr/bin/python3 /opt/codelens/ops.py recover
+TimeoutStartSec=12min
+TimeoutStopSec=90

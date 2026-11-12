@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import httpx
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,10 +59,13 @@ async def authenticate_token(token: str) -> AuthUser:
     return AuthUser(id=user_id, email=email)
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> AuthUser:
+async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> AuthUser:
     if credentials is None or credentials.scheme.lower() != 'bearer':
         raise HTTPException(401, 'Sign in to continue', headers={'WWW-Authenticate': 'Bearer'})
-    return await authenticate_token(credentials.credentials)
+    user = await authenticate_token(credentials.credentials)
+    from app.guards import check_account
+    check_account(user.id, request.method, request.url.path)
+    return user
 
 
 async def owned_repository(db: AsyncSession, repo_id: str, user_id: str) -> Repository:

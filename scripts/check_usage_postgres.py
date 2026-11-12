@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, '/app')
 os.environ.update(DATABASE_URL='postgresql+asyncpg://postgres@127.0.0.1/codelens_usage_check',
                   SUPABASE_URL='https://auth.test', SUPABASE_PUBLISHABLE_KEY='test',
-                  GROQ_API_KEY='test', DEBUG='false')
+                  GROQ_API_KEY='test', DEBUG='false', RESOURCE_GUARDS_ENABLED='false')
 from fastapi import HTTPException
 from sqlalchemy import select, func, delete
 from app.database.base import engine, Base, AsyncSessionLocal, init_db
@@ -76,8 +76,27 @@ async def main():
         assert (await allowance(db, 'concurrency-test'))['remaining'] == 0
         other, reused = await admit(db, 'other-test', 'same', 'zip', 'same', 'same')
         assert other.id != completed_id and not reused
+    # Different account row locks must still serialize the global import queue.
+    from app.config.settings import settings
+    from sqlalchemy import update
+    async with AsyncSessionLocal() as db:
+        await db.execute(update(AnalysisAdmission).where(AnalysisAdmission.status == 'RESERVED').values(status='FAILED'))
+        await db.commit()
+    settings.RESOURCE_GUARDS_ENABLED = True
+    async def queued(n):
+        async with AsyncSessionLocal() as db:
+            try:
+                row, _ = await admit(db, 'queue-' + str(n), 'queue', 'zip', str(n), str(n))
+                return row.id
+            except HTTPException as exc:
+                assert exc.status_code == 429 and exc.headers['Retry-After'] == '60'
+                return None
+    queued_results = await asyncio.gather(*(queued(n) for n in range(12)))
+    assert sum(row is not None for row in queued_results) == 4
+    async with AsyncSessionLocal() as db:
+        assert await db.scalar(select(func.count()).select_from(AnalysisAdmission).where(AnalysisAdmission.status == 'RESERVED')) == 4
     await engine.dispose()
-    print('PostgreSQL passed: migration idempotency, private grants, backfill, concurrent cap, duplicate cache, failures, deletion, account isolation.')
+    print('PostgreSQL passed: migrations, private grants, backfill, concurrent cap, cache, failures, deletion, isolation, and global queue concurrency.')
 
 
 asyncio.run(main())

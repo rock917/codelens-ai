@@ -1,0 +1,9 @@
+[Unit]
+Description=Check CodeLens readiness, storage, stalled jobs and backup freshness
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/codelens/ops.py monitor
+TimeoutStartSec=90

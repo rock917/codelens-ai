@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from app.models.repository import Repository
 from app.models.usage import AccountUsage, AnalysisAdmission
+from app.config.settings import settings
 
 LIMIT = 10
 
@@ -73,6 +74,20 @@ async def admit(db, owner_id, name, source_type, source_key, revision, confirmed
     if cached:
         await db.commit()
         return cached, True
+    if settings.RESOURCE_GUARDS_ENABLED:
+        await db.execute(insert(AccountUsage).values(owner_id='__import_queue__').on_conflict_do_nothing())
+        await db.execute(update(AccountUsage).where(AccountUsage.owner_id == '__import_queue__').values(owner_id='__import_queue__'))
+        pending = await db.scalar(select(func.count()).select_from(AnalysisAdmission).where(AnalysisAdmission.status == 'RESERVED'))
+        own_pending = await db.scalar(select(func.count()).select_from(AnalysisAdmission).where(AnalysisAdmission.status == 'RESERVED', AnalysisAdmission.owner_id == owner_id))
+        if pending >= 4 or own_pending >= 2:
+            await db.rollback()
+            raise HTTPException(429, 'The import queue is full. Wait for current imports to finish.', headers={'Retry-After': '60'})
+    from app.services.archive_safety import ensure_disk_space
+    try:
+        ensure_disk_space(settings.UPLOAD_DIR)
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(503, str(exc))
     previous = await db.scalar(select(AnalysisAdmission.repository_id).where(
         AnalysisAdmission.owner_id == owner_id, AnalysisAdmission.source_key == source_key,
         AnalysisAdmission.status == 'COMPLETED', AnalysisAdmission.revision != revision,

@@ -2,7 +2,7 @@ import os
 import asyncio
 import uuid
 import hashlib
-import zipfile
+import shutil
 import json
 from pathlib import Path
 from typing import Optional, List
@@ -138,24 +138,8 @@ async def process_zip_upload(
             exist_ok=True,
         )
 
-        with zipfile.ZipFile(zip_path, "r") as zf:
-
-            for member in zf.namelist():
-
-                member_path = os.path.realpath(
-                    os.path.join(
-                        extract_dir,
-                        member,
-                    )
-                )
-
-                if not Path(member_path).is_relative_to(Path(extract_dir).resolve()):
-                    continue
-
-                zf.extract(
-                    member,
-                    extract_dir,
-                )
+        from app.services.archive_safety import extract_safe
+        await asyncio.to_thread(extract_safe, zip_path, extract_dir)
 
         await index_directory(
             db,
@@ -188,6 +172,9 @@ async def process_zip_upload(
             RepositoryStatus.FAILED,
             str(e),
         )
+        failed_dir = (Path(settings.UPLOAD_DIR) / repo_id).resolve()
+        if failed_dir.parent == Path(settings.UPLOAD_DIR).resolve():
+            await asyncio.to_thread(shutil.rmtree, failed_dir, ignore_errors=True)
 
     finally:
 
@@ -218,6 +205,8 @@ async def process_github_url(
             exist_ok=True,
         )
 
+        from app.services.archive_safety import ensure_disk_space, validate_directory
+        ensure_disk_space(clone_dir)
         def clone_snapshot():
             # Fetch the admitted commit, never a moving HEAD.
             repo = git.Repo.init(clone_dir)
@@ -227,6 +216,7 @@ async def process_github_url(
             if revision and repo.head.commit.hexsha != revision:
                 raise ValueError('Repository revision changed; please retry. No credit was used.')
         await asyncio.to_thread(clone_snapshot)
+        await asyncio.to_thread(validate_directory, clone_dir)
 
         await index_directory(
             db,
@@ -259,6 +249,9 @@ async def process_github_url(
             RepositoryStatus.FAILED,
             str(e),
         )
+        failed_dir = (Path(settings.UPLOAD_DIR) / repo_id).resolve()
+        if failed_dir.parent == Path(settings.UPLOAD_DIR).resolve():
+            await asyncio.to_thread(shutil.rmtree, failed_dir, ignore_errors=True)
 
 
 async def index_directory(

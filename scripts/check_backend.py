@@ -36,6 +36,7 @@ os.environ.update(
     CHROMA_PERSIST_DIR='./vectors',
     UPLOAD_DIR='./uploads',
     DEBUG='false',
+    RESOURCE_GUARDS_ENABLED='false',
     USE_GPU=str(args.gpu).lower(),
     HF_HUB_OFFLINE='1',
     TRANSFORMERS_OFFLINE='1',
@@ -152,6 +153,105 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post(f'/repositories/{repo_id}/reindex')
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(vector_store.get_chunk_count(repo_id), status['total_chunks'])
+
+    async def test_rate_limits_follow_verified_accounts_and_include_retry_headers(self):
+        from app.guards import account_limiter, edge_limiter
+        account_limiter.windows.clear(); edge_limiter.windows.clear()
+        with patch.object(settings, 'RESOURCE_GUARDS_ENABLED', True):
+            for _ in range(10):
+                result = await self.client.post('/chat', json={'repository_id': 'missing', 'question': 'test'})
+                self.assertEqual(result.status_code, 404)
+            limited = await self.client.post('/chat', json={'repository_id': 'missing', 'question': 'test'},
+                headers={'X-Forwarded-For': '1.2.3.4', 'Origin': settings.FRONTEND_URL})
+            self.assertEqual(limited.status_code, 429)
+            self.assertGreater(int(limited.headers['Retry-After']), 0)
+            self.assertEqual(limited.headers['access-control-allow-origin'], settings.FRONTEND_URL)
+            other = await self.client.post('/chat', json={'repository_id': 'missing', 'question': 'test'},
+                headers={'Authorization': 'Bearer user-b'})
+            self.assertEqual(other.status_code, 404)
+            self.assertEqual((await self.client.get('/health')).status_code, 200)
+        account_limiter.windows.clear(); edge_limiter.windows.clear()
+
+    async def test_request_body_limit_handles_declared_and_chunked_bodies(self):
+        from app.guards import edge_limiter
+        edge_limiter.windows.clear()
+        with patch.object(settings, 'RESOURCE_GUARDS_ENABLED', True):
+            oversized = await self.client.post('/search', content=b'x' * (300 * 1024), headers={'Content-Type': 'application/json'})
+            self.assertEqual(oversized.status_code, 413)
+            async def chunks():
+                yield b'{"query":"'
+                yield b'x' * (300 * 1024)
+                yield b'"}'
+            chunked = await self.client.post('/search', content=chunks(), headers={'Content-Type': 'application/json'})
+            self.assertEqual(chunked.status_code, 413)
+
+    async def test_limiter_expiry_and_memory_cap(self):
+        from app.guards import WindowLimiter
+        limiter = WindowLimiter(max_keys=2)
+        self.assertEqual(limiter.check('a', 2, 60, now=0), 0)
+        self.assertEqual(limiter.check('a', 2, 60, now=1), 0)
+        self.assertEqual(limiter.check('a', 2, 60, now=2), 58)
+        self.assertEqual(limiter.check('b', 2, 60, now=2), 0)
+        self.assertGreater(limiter.check('c', 2, 60, now=2), 0)
+        self.assertEqual(limiter.check('a', 2, 60, now=60), 0)
+        self.assertEqual(limiter.check('c', 2, 60, now=200), 0)
+        self.assertLessEqual(len(limiter.windows), 2)
+
+    async def test_archives_reject_traversal_symlinks_and_expansion_before_extracting(self):
+        from app.services.archive_safety import extract_safe
+        import stat
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for kind in ('traversal', 'symlink', 'large', 'many'):
+                zip_path = root / (kind + '.zip')
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
+                    if kind == 'traversal':
+                        z.writestr('../outside.txt', 'unsafe')
+                    elif kind == 'symlink':
+                        entry = zipfile.ZipInfo('link')
+                        entry.external_attr = (stat.S_IFLNK | 0o777) << 16
+                        z.writestr(entry, '/etc/passwd')
+                    elif kind == 'large':
+                        z.writestr('large.txt', b'x' * (2 * 1024 * 1024))
+                    else:
+                        z.writestr('a', '1'); z.writestr('b', '2')
+                with patch.object(settings, 'MAX_EXTRACTED_SIZE_MB', 1), patch.object(settings, 'MAX_REPOSITORY_FILES', 1):
+                    with self.assertRaises(ValueError):
+                        extract_safe(zip_path, root / kind)
+                self.assertEqual(list((root / kind).rglob('*')), [])
+            self.assertFalse((root / 'outside.txt').exists())
+            safe = root / 'safe.zip'
+            safe.write_bytes(archive())
+            extract_safe(safe, root / 'safe')
+            self.assertEqual((root / 'safe/sample.py').read_text(), SOURCE)
+
+    async def test_queue_limit_preserves_duplicate_reuse(self):
+        from app.services.admission_service import admit
+        from fastapi import HTTPException
+        with patch.object(settings, 'RESOURCE_GUARDS_ENABLED', True):
+            async with AsyncSessionLocal() as db:
+                first, _ = await admit(db, USER_A, 'one', 'zip', 'one', 'one')
+                await admit(db, USER_A, 'two', 'zip', 'two', 'two')
+                with self.assertRaises(HTTPException) as exc:
+                    await admit(db, USER_A, 'three', 'zip', 'three', 'three')
+                self.assertEqual(exc.exception.status_code, 429)
+                cached, reused = await admit(db, USER_A, 'one', 'zip', 'one', 'one')
+                self.assertTrue(reused)
+                self.assertEqual(cached.id, first.id)
+
+    async def test_ready_fails_without_storage_and_model_slots_release_after_errors(self):
+        self.assertEqual((await self.client.get('/ready')).status_code, 200)
+        with patch('app.services.archive_safety.ensure_disk_space', side_effect=ValueError('full')):
+            self.assertEqual((await self.client.get('/ready')).status_code, 503)
+        from app.services.llm.groq_provider import model_slot
+        from types import SimpleNamespace
+        provider = SimpleNamespace(slots=asyncio.Semaphore(2))
+        with self.assertRaises(ValueError):
+            async with model_slot(provider):
+                raise ValueError('provider failed')
+        async with model_slot(provider):
+            async with model_slot(provider):
+                self.assertTrue(provider.slots.locked())
 
     async def test_lifetime_quota_cache_and_deletion(self):
         payload = archive()
@@ -509,7 +609,7 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         def guarded(dependency):
             return dependency.call is get_current_user or any(guarded(d) for d in dependency.dependencies)
         for route in app.routes:
-            if isinstance(route, APIRoute) and route.path not in ('/', '/health'):
+            if isinstance(route, APIRoute) and route.path not in ('/', '/health', '/ready'):
                 self.assertTrue(guarded(route.dependant), route.path)
 
     async def test_cross_account_and_legacy_isolation(self):

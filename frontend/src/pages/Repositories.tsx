@@ -155,7 +155,7 @@ export function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuc
               Drop your ZIP file here
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              or click to browse · Max 100MB
+              or click to browse · Max 100MB ZIP · 250MB extracted · 2,000 entries
             </div>
             <input ref={fileRef} type="file" accept=".zip" style={{ display: 'none' }}
               onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
