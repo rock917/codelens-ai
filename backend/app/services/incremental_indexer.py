@@ -210,7 +210,7 @@ async def _reprocess_file(
     complexity_score = 0.0
     imports_json = "[]"
 
-    if language in ("python", "javascript", "typescript", "json", "notebook"):
+    if language in ("python", "javascript", "typescript", "json", "notebook", "java", "go", "cpp"):
         parsed = await asyncio.to_thread(cached_parse, repo_id, relative_path, content, language)
 
         if parsed and parsed.display_content is not None:

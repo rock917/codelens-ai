@@ -11,7 +11,7 @@ from app.services.embedding_service import embedding_service
 
 def pipeline_version():
     return cache.fingerprint(settings.EMBEDDING_MODEL, settings.USE_GPU, sys.version_info[:2], cache.code_version(
-        'parser/base_parser.py', 'parser/python_parser.py', 'parser/js_parser.py',
+        'parser/base_parser.py', 'parser/python_parser.py', 'parser/js_parser.py', 'parser/compiled_parser.py',
         'parser/parser_factory.py', 'chunker.py', 'embedding_service.py',
         'file_filter.py', 'importance_scorer.py', 'cached_processing.py',
         'repository_service.py', 'incremental_indexer.py', 'vector_indexing.py', 'documents.py', '../../requirements.txt'))

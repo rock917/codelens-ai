@@ -10,6 +10,9 @@ import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
 import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
+import java from 'react-syntax-highlighter/dist/esm/languages/hljs/java'
+import go from 'react-syntax-highlighter/dist/esm/languages/hljs/go'
+import cpp from 'react-syntax-highlighter/dist/esm/languages/hljs/cpp'
 import { syntaxTheme } from '../theme/syntax'
 import DocumentView from '../components/DocumentView'
 import type { DocumentData } from '../components/DocumentView'
@@ -21,6 +24,9 @@ import {
 import type { Repository, FileRecord, Symbol } from '../types'
 
 SyntaxHighlighter.registerLanguage('python', python)
+SyntaxHighlighter.registerLanguage('java', java)
+SyntaxHighlighter.registerLanguage('go', go)
+SyntaxHighlighter.registerLanguage('cpp', cpp)
 SyntaxHighlighter.registerLanguage('javascript', javascript)
 SyntaxHighlighter.registerLanguage('typescript', typescript)
 
@@ -169,6 +175,7 @@ export default function Explorer() {
   const refreshInFlight = useRef(false)
   const [fileContent, setFileContent] = useState<string>('')
   const [document, setDocument] = useState<DocumentData | null>(null)
+  const [parsing, setParsing] = useState<{ status: string; diagnostics: string[] } | null>(null)
   const [loadingFile, setLoadingFile] = useState(false)
   const [activeTab, setActiveTab] = useState<'code' | 'symbols' | 'info' | 'summary'>('code')
   const [highlightLine, setHighlightLine] = useState<number | null>(null)
@@ -193,6 +200,7 @@ export default function Explorer() {
     setSummary('')
     setFileContent('')
     setDocument(null)
+    setParsing(null)
     try {
       const res = await getRepositoryFiles(repo.id)
       setFiles(res.data)
@@ -207,6 +215,7 @@ export default function Explorer() {
     setLoadingFile(true)
     setFileContent('')
     setDocument(null)
+    setParsing(null)
     setSymbols([])
     setSummary('')
     setActiveTab('code')
@@ -227,6 +236,7 @@ export default function Explorer() {
       if (contentRes.status === 'fulfilled') {
         setFileContent(contentRes.value.data?.content || '')
         setDocument(contentRes.value.data?.document || null)
+        setParsing(contentRes.value.data?.parsing || null)
       }
     } catch (err) {
       console.error(err)
@@ -266,6 +276,7 @@ export default function Explorer() {
   const getLang = (lang: string) => {
     const map: Record<string, string> = {
       python: 'python', javascript: 'javascript',
+      java: 'java', go: 'go', cpp: 'cpp',
       json: 'json', typescript: 'typescript', jsx: 'javascript', tsx: 'typescript'
     }
     return map[lang] || 'text'
@@ -488,6 +499,9 @@ export default function Explorer() {
                       <DocumentView document={document} language={selectedFile.language} highlightLine={highlightLine} />
                     ) : fileContent ? (
                       <div style={{ position: 'relative' }}>
+                        {parsing && <div role="status" style={{ padding: '12px 20px', color: parsing.status === 'complete' ? 'var(--text-muted)' : 'var(--warning)', fontSize: 12 }}>
+                          {parsing.status === 'complete' ? 'Syntax parsed. Health checks are limited static checks; code is never compiled or executed.' : parsing.diagnostics.join(' ')}
+                        </div>}
                         <SyntaxHighlighter
                           language={getLang(selectedFile.language)}
                           style={syntaxTheme}
@@ -551,8 +565,8 @@ export default function Explorer() {
                         </div>
 
                         {(() => {
-                          const classes = symbols.filter(s => s.type === 'class')
-                          const functions = symbols.filter(s => s.type === 'function')
+                          const classes = symbols.filter(s => ['class', 'struct', 'interface', 'enum', 'record', 'namespace', 'type'].includes(s.type))
+                          const functions = symbols.filter(s => s.type === 'function' || (s.type === 'method' && !classes.some(c => c.name === s.parent_name)))
                           const methods = symbols.filter(s => s.type === 'method')
 
                           return (
@@ -577,7 +591,7 @@ export default function Explorer() {
                                       background: 'color-mix(in srgb,var(--primary) 15%,transparent)',
                                       color: 'var(--primary)', fontSize: '10px',
                                       fontWeight: '700', fontFamily: 'monospace'
-                                    }}>class</span>
+                                    }}>{cls.type}</span>
                                     <span style={{ fontSize: '13px', fontWeight: '700', fontFamily: 'monospace', flex: 1 }}>
                                       {cls.name}
                                     </span>
@@ -605,7 +619,7 @@ export default function Explorer() {
                                         background: 'color-mix(in srgb,var(--accent) 10%,transparent)',
                                         color: 'var(--accent)', fontSize: '9px',
                                         fontWeight: '700', fontFamily: 'monospace'
-                                      }}>def</span>
+                                      }}>method</span>
                                       <span style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--text)', flex: 1 }}>
                                         {method.signature || method.name + '()'}
                                       </span>
@@ -684,7 +698,7 @@ export default function Explorer() {
                         { label: 'Language', value: selectedFile.language },
                         { label: 'Lines of Code', value: selectedFile.loc },
                         { label: 'File Size', value: `${(selectedFile.size / 1024).toFixed(2)} KB` },
-                        { label: 'Classes', value: selectedFile.num_classes },
+                        { label: 'Classes / Types', value: selectedFile.num_classes },
                         { label: 'Functions', value: selectedFile.num_functions },
                         { label: 'Complexity', value: selectedFile.complexity_score.toFixed(2) },
                         { label: 'Importance Score', value: selectedFile.importance_score.toFixed(1) },

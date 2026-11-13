@@ -165,11 +165,13 @@ export const getAllFileSummaries = (repoId: string) =>
 export const generateTests = (
   repositoryId: string,
   fileId: string,
-  symbolName?: string
+  symbolName?: string,
+  symbolId?: string
 ) => api.post('/generate/tests', {
   repository_id: repositoryId,
   file_id: fileId,
   symbol_name: symbolName,
+  symbol_id: symbolId,
 })
 
 export const generateDocs = (

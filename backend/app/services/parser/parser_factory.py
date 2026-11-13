@@ -1,12 +1,16 @@
 from app.services.parser.base_parser import BaseParser, ParsedFile
 from app.services.parser.python_parser import PythonParser
 from app.services.parser.js_parser import JavaScriptParser
+from app.services.parser.compiled_parser import CompiledParser
 
 class ParserFactory:
     _parsers = {
         "python": PythonParser(),
         "javascript": JavaScriptParser(),
         "typescript": JavaScriptParser(),
+        "java": CompiledParser('java'),
+        "go": CompiledParser('go'),
+        "cpp": CompiledParser('cpp'),
     }
 
     @classmethod

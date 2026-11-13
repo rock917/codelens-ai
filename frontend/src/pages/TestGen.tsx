@@ -43,7 +43,7 @@ export default function TestGen() {
     try {
       const res = await getRepositoryFiles(repo.id)
       const sourceFiles = res.data.filter(
-        (f: FileRecord) => ['python', 'javascript', 'typescript'].includes(f.language)
+        (f: FileRecord) => ['python', 'javascript', 'typescript', 'java', 'go', 'cpp'].includes(f.language)
       )
       setFiles(sourceFiles)
     } catch (err) { console.error(err) }
@@ -67,6 +67,7 @@ export default function TestGen() {
       const res = await generateTests(
         selectedRepo.id,
         selectedFile.id,
+        symbols.find(s => s.id === selectedSymbol)?.name,
         selectedSymbol || undefined
       )
       setResult(res.data)
@@ -209,6 +210,7 @@ export default function TestGen() {
                       Function (optional)
                     </div>
                     <select
+                      aria-label="Function to test"
                       value={selectedSymbol}
                       onChange={e => setSelectedSymbol(e.target.value)}
                       style={{
@@ -220,8 +222,8 @@ export default function TestGen() {
                     >
                       <option value="">Entire file</option>
                       {symbols.map(sym => (
-                        <option key={sym.id} value={sym.name}>
-                          {sym.parent_name ? `${sym.parent_name}.` : ''}{sym.name}()
+                        <option key={sym.id} value={sym.id}>
+                          {sym.parent_name ? `${sym.parent_name}.` : ''}{sym.signature || sym.name} · L{sym.start_line}
                         </option>
                       ))}
                     </select>
@@ -245,6 +247,7 @@ export default function TestGen() {
               </div>
 
               {/* Symbols quick view */}
+              <p style={{ padding: '8px 20px', fontSize: 12, color: 'var(--text-muted)' }}>Generated tests are suggestions. Review dependencies and run them in your own project.</p>
               {symbols.length > 0 && !result && !generating && (
                 <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{
@@ -257,13 +260,13 @@ export default function TestGen() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {symbols.map(sym => (
                       <button key={sym.id}
-                        onClick={() => setSelectedSymbol(sym.name)}
+                        onClick={() => setSelectedSymbol(sym.id)}
                         style={{
                           display: 'flex', alignItems: 'center', gap: '6px',
                           padding: '4px 10px', borderRadius: '6px',
-                          border: `1px solid ${selectedSymbol === sym.name ? 'var(--primary)' : 'var(--border)'}`,
-                          background: selectedSymbol === sym.name ? 'var(--primary-glow)' : 'var(--bg-elevated)',
-                          color: selectedSymbol === sym.name ? 'var(--primary)' : 'var(--text-muted)',
+                          border: `1px solid ${selectedSymbol === sym.id ? 'var(--primary)' : 'var(--border)'}`,
+                          background: selectedSymbol === sym.id ? 'var(--primary-glow)' : 'var(--bg-elevated)',
+                          color: selectedSymbol === sym.id ? 'var(--primary)' : 'var(--text-muted)',
                           cursor: 'pointer', fontSize: '11px', fontFamily: 'monospace',
                           transition: 'all 0.15s'
                         }}>

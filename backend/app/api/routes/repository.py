@@ -321,6 +321,12 @@ async def get_file_content(
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
         document = None
+        parsing = None
+        if file.language in ('java', 'go', 'cpp'):
+            from app.services.cached_processing import parse
+            parsed = await asyncio.to_thread(parse, repo_id, file.path, content, file.language)
+            parsing = {'status': 'failed' if parsed.error else 'partial' if parsed.diagnostics else 'complete',
+                       'diagnostics': [parsed.error] if parsed.error else parsed.diagnostics}
         if file.language in ('json', 'notebook'):
             from app.services.documents import document_view
             document = await asyncio.to_thread(document_view, content, file.language)
@@ -333,7 +339,8 @@ async def get_file_content(
             "language": file.language,
             "content": content,
             "loc": file.loc,
-            "document": document
+            "document": document,
+            "parsing": parsing
         }
     except Exception as e:
         raise HTTPException(500, f"Could not read file: {str(e)}")

@@ -86,6 +86,156 @@ async def fake_stream(*args, **kwargs):
 
 
 class BackendChecks(unittest.IsolatedAsyncioTestCase):
+    async def test_compiled_languages_parsing_boundaries_and_rules(self):
+        from language_fixtures import JAVA, GO, CPP
+        from app.services.parser.compiled_parser import CompiledParser
+        from app.services.analyzer.compiled_analyzer import analyze_compiled
+        from app.services.file_filter import should_process_file, detect_language
+        for language, source, expected, import_name in (
+            ('java', JAVA, {'Sample', 'run', 'inspect', 'Reader', 'read', 'Point'}, 'java.security.MessageDigest'),
+            ('go', GO, {'Worker', 'Reader', 'Read', 'Run', 'Identity'}, 'crypto/md5'),
+            ('cpp', CPP, {'demo', 'Box', '~Box', 'get', 'later', 'Count', 'copy'}, 'cstring'),
+        ):
+            with self.subTest(language=language):
+                parsed = CompiledParser(language).parse('sample.' + language, source)
+                self.assertFalse(parsed.error)
+                self.assertFalse(parsed.diagnostics, parsed.diagnostics)
+                self.assertTrue(expected.issubset({s.name for s in parsed.symbols}))
+                self.assertFalse({'imaginary', 'invented'} & {s.name for s in parsed.symbols})
+                self.assertIn(import_name, [i.module for i in parsed.imports])
+                for symbol in parsed.symbols:
+                    self.assertGreaterEqual(symbol.start_line, 1)
+                    self.assertLessEqual(symbol.end_line, len(source.splitlines()))
+                issues, error = analyze_compiled('sample.' + language, source, language)
+                self.assertIsNone(error)
+                categories = [i.issue_type for i in issues]
+                self.assertIn('TOO_MANY_PARAMS', categories)
+                self.assertEqual(categories.count('HARDCODED_CREDENTIAL'), 1)
+                self.assertEqual(categories.count('TECHNICAL_DEBT_TODO'), 1)
+                self.assertIn('UNBOUNDED_BUFFER_OPERATION' if language == 'cpp' else 'WEAK_CRYPTO', categories)
+                for issue in issues:
+                    self.assertGreaterEqual(issue.line, 1)
+                    self.assertLessEqual(issue.line, len(source.splitlines()))
+        java = CompiledParser('java').parse('Sample.java', JAVA)
+        overloads = [s for s in java.symbols if s.name == 'run']
+        self.assertEqual(len(overloads), 2)
+        self.assertNotEqual(overloads[0].signature, overloads[1].signature)
+        self.assertNotEqual(overloads[0].start_line, overloads[1].start_line)
+        go = CompiledParser('go').parse('worker.go', GO.rstrip())
+        self.assertFalse(go.diagnostics)
+        self.assertEqual(next(s.parent_name for s in go.symbols if s.name == 'Run'), 'Worker')
+        cpp = CompiledParser('cpp').parse('sample.cpp', CPP)
+        self.assertTrue(next(s.signature for s in cpp.symbols if s.name == 'Box').startswith('template'))
+        for extension in ('.cpp', '.cc', '.cxx', '.h', '.hh', '.hpp', '.hxx', '.ipp', '.tpp', '.C'):
+            self.assertTrue(should_process_file('sample' + extension))
+            self.assertEqual(detect_language('sample' + extension), 'cpp')
+        self.assertEqual(detect_language('sample.c'), 'c')
+        edge = '/* café: { } */\nstruct Box { int run(); };\nint Box::run() { return 1; }\nint *pointer(int *x) { return x; }\nint (*callback)(int);\n'
+        parsed = CompiledParser('cpp').parse('edge.hpp', edge)
+        self.assertFalse(parsed.diagnostics)
+        self.assertTrue(any(s.name == 'run' and s.type == 'method' and s.start_line == 3 for s in parsed.symbols))
+        self.assertTrue(any(s.name == 'pointer' for s in parsed.symbols))
+        self.assertFalse(any(s.name == 'callback' for s in parsed.symbols))
+        from app.services.chunker import chunk_parsed_file
+        chunks = chunk_parsed_file(parsed, edge, 'test', 'file')
+        self.assertTrue(all(c.end_line <= len(edge.splitlines()) and len(c.content) <= 1601 for c in chunks))
+        nested = 'int work(int x) {\n' + 'if (x) {\n' * 12 + 'return x;\n' + '}\n' * 12 + 'return 0;\n}\n'
+        issues, error = analyze_compiled('deep.cpp', nested, 'cpp')
+        self.assertIsNone(error)
+        self.assertTrue({'HIGH_COMPLEXITY', 'DEEP_NESTING'}.issubset({i.issue_type for i in issues}))
+        # All symbol chunks, including legacy Python splitting, use inclusive bounds.
+        from app.services.parser.python_parser import PythonParser
+        long_python = 'def long_function():\n' + '    value = 1\n' * 160 + '    return value\n'
+        legacy = PythonParser().parse('long.py', long_python)
+        pieces = chunk_parsed_file(legacy, long_python, 'test', 'python')
+        self.assertTrue(all(c.end_line <= legacy.symbols[0].end_line for c in pieces))
+        self.assertEqual(pieces[-1].end_line, len(long_python.splitlines()))
+
+    async def test_compiled_partial_parse_is_searchable_but_unscored(self):
+        from app.services.parser.compiled_parser import CompiledParser
+        from app.services.analyzer.compiled_analyzer import analyze_compiled
+        for language, source in (('java', 'class Broken { int run( { ??? }'),
+                                 ('go', 'package x\nfunc bad( { ??? }'), ('cpp', 'int run( { ??? }')):
+            parsed = CompiledParser(language).parse('broken.' + language, source)
+            self.assertTrue(parsed.diagnostics)
+            issues, reason = analyze_compiled('broken.' + language, source, language)
+            self.assertFalse(issues)
+            self.assertTrue(reason)
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as zipped:
+            zipped.writestr('broken.java', 'class Broken { int run( { ??? }')
+        response = await self.client.post('/repositories/upload', files={'file': ('broken.zip', output.getvalue(), 'application/zip')})
+        repo = response.json()['id']
+        file = (await self.client.get(f'/repositories/{repo}/files')).json()[0]
+        view = (await self.client.get(f"/repositories/{repo}/files/{file['id']}/content")).json()
+        self.assertEqual(view['parsing']['status'], 'partial')
+        self.assertIn('Broken', view['content'])
+        await self.client.post(f'/analysis/{repo}')
+        health = (await self.client.get(f'/analysis/{repo}/summary')).json()
+        self.assertIsNone(health['health_score'])
+        self.assertEqual(health['coverage']['compiled_files_scanned'], 0)
+        self.assertTrue(health['coverage']['exclusions'])
+
+    async def test_compiled_languages_import_search_chat_generation_and_cache(self):
+        from language_fixtures import SOURCES
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as zipped:
+            for name, source in SOURCES.items():
+                zipped.writestr(name, source)
+        payload = output.getvalue()
+        response = await self.client.post('/repositories/upload', files={'file': ('languages.zip', payload, 'application/zip')})
+        self.assertEqual(response.status_code, 200, response.text)
+        repo = response.json()['id']
+        status = (await self.client.get(f'/repositories/{repo}/status')).json()
+        self.assertEqual(status['status'], 'READY', status)
+        files = {f['path']: f for f in (await self.client.get(f'/repositories/{repo}/files')).json()}
+        self.assertEqual(set(files), set(SOURCES))
+        for name, file in files.items():
+            self.assertGreater(file['num_functions'], 0, name)
+            view = (await self.client.get(f"/repositories/{repo}/files/{file['id']}/content")).json()
+            self.assertEqual(view['parsing']['status'], 'complete', view)
+            search = await self.client.post('/search', json={'repository_id': repo, 'query': 'function', 'n_results': 100})
+            self.assertEqual(search.status_code, 200, search.text)
+            self.assertTrue(any(r['file_path'] == name and r['symbol_name'] for r in search.json()['results']), name)
+        chat = await self.client.post('/chat', json={'repository_id': repo, 'question': 'Explain the code', 'stream': False})
+        self.assertEqual(chat.status_code, 200, chat.text)
+        self.assertTrue(chat.json()['sources'])
+        await self.client.post(f'/analysis/{repo}')
+        summary = (await self.client.get(f'/analysis/{repo}/summary')).json()
+        self.assertEqual(summary['coverage']['compiled_files_scanned'], 4, summary)
+        self.assertGreater(summary['total_issues'], 0)
+        self.assertTrue((await self.client.post(f'/analysis/{repo}')).json()['cached'])
+        java_id = files['Sample.java']['id']
+        symbols = (await self.client.get(f'/symbols/file/{java_id}')).json()
+        overload = next(s for s in symbols if s['name'] == 'run' and 'String' in s['signature'])
+        body = {'repository_id': repo, 'file_id': java_id, 'symbol_name': 'run'}
+        self.assertEqual((await self.client.post('/generate/tests', json=body)).status_code, 400)
+        generated = await self.client.post('/generate/tests', json={**body, 'symbol_id': overload['id']})
+        self.assertEqual(generated.status_code, 200, generated.text)
+        self.assertIn('String', generated.json()['signature'])
+        self.assertIn('JUnit 5', groq_provider.chat.call_args.kwargs['messages'][0]['content'])
+        for name, framework in (('worker.go', 'standard testing package'), ('sample.cpp', 'GoogleTest')):
+            result = await self.client.post('/generate/tests', json={'repository_id': repo, 'file_id': files[name]['id']})
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertIn(framework, groq_provider.chat.call_args.kwargs['messages'][0]['content'])
+        wrong_file = await self.client.post('/generate/tests', json={**body, 'file_id': files['worker.go']['id'], 'symbol_id': overload['id']})
+        self.assertEqual(wrong_file.status_code, 400)
+        reused = await self.client.post('/repositories/upload', files={'file': ('languages.zip', payload, 'application/zip')})
+        self.assertTrue(reused.json()['reused'])
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['used'], 1)
+        # A subsequent source change replaces the derived index without charging again.
+        source_path = Path(settings.UPLOAD_DIR) / repo / 'worker.go'
+        source_path.write_text(SOURCES['worker.go'] + '\nfunc Added() int { return 42 }\n', encoding='utf-8')
+        refreshed = await self.client.post(f'/repositories/{repo}/reindex')
+        self.assertEqual(refreshed.status_code, 200, refreshed.text)
+        all_symbols = (await self.client.get(f'/symbols/{repo}')).json()
+        self.assertTrue(any(s['name'] == 'Added' for s in all_symbols))
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['used'], 1)
+        self.assertEqual((await self.client.get(f'/analysis/{repo}/summary')).json()['analysis_status'], 'STALE')
+        self.client.headers['Authorization'] = 'Bearer user-b'
+        self.assertEqual((await self.client.get(f'/symbols/file/{java_id}')).status_code, 404)
+        self.assertEqual((await self.client.post('/generate/tests', json={**body, 'symbol_id': overload['id']})).status_code, 404)
+
     async def asyncSetUp(self):
         from app.services.account_deletion import recently_deleted
         recently_deleted.clear()

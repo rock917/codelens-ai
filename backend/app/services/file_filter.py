@@ -18,6 +18,7 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     ".json", ".ipynb",
     ".py", ".js", ".ts", ".jsx", ".tsx",
     ".java", ".c", ".cpp", ".h", ".hpp",
+    ".cc", ".cxx", ".hh", ".hxx", ".ipp", ".tpp",
     ".go", ".rs", ".rb", ".php", ".cs",
     ".swift", ".kt", ".scala", ".r", ".sql"
 }
@@ -94,8 +95,9 @@ def detect_language(file_path: str) -> str:
         ".java": "java",
         ".c": "c",
         ".cpp": "cpp",
-        ".h": "c",
+        ".h": "cpp",
         ".hpp": "cpp",
+        ".cc": "cpp", ".cxx": "cpp", ".hh": "cpp", ".hxx": "cpp", ".ipp": "cpp", ".tpp": "cpp",
         ".go": "go",
         ".rs": "rust",
         ".rb": "ruby",
@@ -114,6 +116,8 @@ def detect_language(file_path: str) -> str:
         ".md": "markdown",
         ".rst": "rst"
     }
+    if Path(file_path).suffix == '.C':
+        return 'cpp'
     ext = Path(file_path).suffix.lower()
     return extension_map.get(ext, "unknown")
 

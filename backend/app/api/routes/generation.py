@@ -22,6 +22,7 @@ class TestGenerationRequest(BaseModel):
     repository_id: str
     file_id: str
     symbol_name: Optional[str] = None
+    symbol_id: Optional[str] = None
 
 class DocGenerationRequest(BaseModel):
     repository_id: str
@@ -44,12 +45,13 @@ async def generate_tests(
     if not repo:
         raise HTTPException(404, "Repository not found")
 
-    if request.symbol_name:
+    if request.symbol_name or request.symbol_id:
         result = await generate_unit_tests(
             db=db,
             file_id=request.file_id,
             symbol_name=request.symbol_name,
-            repository_id=request.repository_id
+            repository_id=request.repository_id,
+            symbol_id=request.symbol_id,
         )
     else:
         result = await generate_tests_for_file(

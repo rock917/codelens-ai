@@ -16,6 +16,17 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 
+it.each(['java', 'go', 'cpp'])('shows %s parse coverage and receiver methods without a local type declaration', async language => {
+  api.getRepositoryFiles.mockResolvedValue({ data: [{ id: 'file', path: `sample.${language}`, language, importance_level: 'LOW', loc: 2 }] })
+  api.getFileContent.mockResolvedValue({ data: { content: 'int run() { return 1; }', parsing: { status: 'partial', diagnostics: ['Partial parse: file excluded from health scoring.'] } } })
+  api.getFileSymbols.mockResolvedValue({ data: [{ id: 'method', name: 'run', type: 'method', parent_name: 'Elsewhere', signature: 'run()', start_line: 1, end_line: 1, complexity: 1 }] })
+  await act(async () => { render(<MemoryRouter><Explorer /></MemoryRouter>) })
+  await act(async () => { fireEvent.click(screen.getByText(`sample.${language}`)) })
+  expect(screen.getByText('Partial parse: file excluded from health scoring.')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /Symbols/ }))
+  expect(screen.getByText('run()')).toBeTruthy()
+})
+
 it('still shows document validation when summary generation rejects invalid content', async () => {
   api.getRepositoryFiles.mockResolvedValue({ data: [{ id: 'file', path: 'broken.json', language: 'json', importance_level: 'LOW', loc: 0 }] })
   api.getFileSummary.mockRejectedValue(new Error('No indexed content'))

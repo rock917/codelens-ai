@@ -34,7 +34,7 @@ export interface Symbol {
   id: string
   file_id: string
   name: string
-  type: 'class' | 'function' | 'method' | 'json_path'
+  type: 'class' | 'struct' | 'interface' | 'enum' | 'record' | 'namespace' | 'type' | 'function' | 'method' | 'json_path'
   start_line: number
   end_line: number
   parent_name?: string
@@ -61,7 +61,7 @@ export interface AnalysisSummary {
   by_type: Record<string, number>
   health_score: number | null
   analysis_status: 'NOT_RUN' | 'LEGACY' | 'STALE' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
-  coverage: { scanned_files: number, scanned_loc: number, unsupported_files: number; notebook_cells_scanned?: number; notebook_cells_skipped?: number; json_files_validated?: number; exclusions?: { path: string; reason: string }[] } | null
+  coverage: { scanned_files: number, scanned_loc: number, unsupported_files: number; compiled_files_scanned?: number; notebook_cells_scanned?: number; notebook_cells_skipped?: number; json_files_validated?: number; exclusions?: { path: string; reason: string }[] } | null
   completed_at: string | null
   error_message: string | null
 }

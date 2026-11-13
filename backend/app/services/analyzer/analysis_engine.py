@@ -13,7 +13,7 @@ from app.services.analyzer.security_analyzer import analyze_security
 from app.services.analyzer.smell_analyzer import analyze_smells
 from app.config.settings import settings
 
-SUPPORTED_LANGUAGES = ("python", "javascript", "typescript", "notebook", "json")
+SUPPORTED_LANGUAGES = ("python", "javascript", "typescript", "notebook", "json", "java", "go", "cpp")
 logger = logging.getLogger(__name__)
 
 
@@ -59,7 +59,8 @@ def source_key(file_id, path, language, content):
 def snapshot_key(sources, files):
     from app.services import result_cache as cache
     version = cache.code_version('analyzer/analysis_engine.py', 'analyzer/complexity_analyzer.py',
-                                 'analyzer/security_analyzer.py', 'analyzer/smell_analyzer.py', 'documents.py')
+                                 'analyzer/security_analyzer.py', 'analyzer/smell_analyzer.py', 'documents.py',
+                                 'analyzer/compiled_analyzer.py', 'parser/compiled_parser.py', '../../requirements.txt')
     return cache.fingerprint(version, sorted(sources), sorted([tuple(f) for f in files]))
 
 
@@ -73,9 +74,24 @@ def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
     findings = []
     scanned_files = scanned_loc = 0
     notebook_scanned = notebook_skipped = json_validated = 0
+    compiled_scanned = 0
     exclusions = []
     for file_id, path, language, content in sources:
         source_keys.append(source_key(file_id, path, language, content))
+        if language in ('java', 'go', 'cpp'):
+            from app.services.analyzer.compiled_analyzer import analyze_compiled
+            checks, exclusion = analyze_compiled(path, content, language)
+            if exclusion:
+                exclusions.append({'path': path, 'reason': exclusion})
+            else:
+                compiled_scanned += 1
+                scanned_files += 1
+                scanned_loc += len(content.splitlines())
+                for issue in checks:
+                    findings.append(dict(id=str(uuid.uuid4()), repository_id=repo_id, file_id=file_id,
+                        issue_type=issue.issue_type, severity=issue.severity, message=issue.message,
+                        line=issue.line, suggestion=issue.suggestion))
+            continue
         units = [(content, language, 0, '')]
         if language in ('json', 'notebook'):
             from app.services.documents import document_view
@@ -111,6 +127,7 @@ def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
                       "unsupported_files": len(files) - scanned_files,
                       "notebook_cells_scanned": notebook_scanned, "notebook_cells_skipped": notebook_skipped,
                       "json_files_validated": json_validated, "exclusions": exclusions,
+                      "compiled_files_scanned": compiled_scanned,
                       "cache_key": snapshot_key(source_keys, files)}
 
 

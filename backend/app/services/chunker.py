@@ -86,7 +86,7 @@ def _split_large_symbol(
         if not content.strip():
             continue
         actual_start = symbol.start_line + i
-        actual_end = actual_start + len(chunk_lines)
+        actual_end = actual_start + len(chunk_lines) - 1
         chunks.append(CodeChunk(
             repository_id=repository_id,
             file_id=file_id,
@@ -127,7 +127,7 @@ def chunk_parsed_file(
                     fragment = line[offset:offset + 1400]
                     if buffer and len(buffer) + len(fragment) > 1600:
                         chunks.append(CodeChunk(repository_id, file_id, parsed_file.path, section['language'],
-                            buffer, start, end, section['name'], section['type'], chunk_index=chunk_index))
+                            buffer, start, end, section['name'], section['type'], parent_name=section.get('parent_name'), chunk_index=chunk_index))
                         chunk_index += 1
                         buffer = ''
                     if not buffer:
@@ -136,7 +136,7 @@ def chunk_parsed_file(
                     end = number
             if buffer.strip():
                 chunks.append(CodeChunk(repository_id, file_id, parsed_file.path, section['language'],
-                    buffer.rstrip(), start, end, section['name'], section['type'], chunk_index=chunk_index))
+                    buffer.rstrip(), start, end, section['name'], section['type'], parent_name=section.get('parent_name'), chunk_index=chunk_index))
                 chunk_index += 1
         return chunks
 

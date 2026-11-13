@@ -377,7 +377,7 @@ async def index_directory(
         if lang in (
             "python",
             "javascript",
-            "typescript", "json", "notebook",
+            "typescript", "json", "notebook", "java", "go", "cpp",
         ):
 
             parsed = await asyncio.to_thread(

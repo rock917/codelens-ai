@@ -13,9 +13,15 @@ import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
 import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
 import json from 'react-syntax-highlighter/dist/esm/languages/hljs/json'
+import java from 'react-syntax-highlighter/dist/esm/languages/hljs/java'
+import go from 'react-syntax-highlighter/dist/esm/languages/hljs/go'
+import cpp from 'react-syntax-highlighter/dist/esm/languages/hljs/cpp'
 import { syntaxTheme } from '../theme/syntax'
 
 SyntaxHighlighter.registerLanguage('python', python)
+SyntaxHighlighter.registerLanguage('java', java)
+SyntaxHighlighter.registerLanguage('go', go)
+SyntaxHighlighter.registerLanguage('cpp', cpp)
 SyntaxHighlighter.registerLanguage('json', json)
 SyntaxHighlighter.registerLanguage('javascript', javascript)
 SyntaxHighlighter.registerLanguage('typescript', typescript)
@@ -59,6 +65,7 @@ function ResultCard({ result, index, onClick, selected }: {
   const getLang = (lang: string) => {
     const map: Record<string, string> = {
       python: 'python', javascript: 'javascript',
+      java: 'java', go: 'go', cpp: 'cpp',
       json: 'json', typescript: 'typescript', jsx: 'javascript', tsx: 'typescript'
     }
     return map[lang] || 'text'

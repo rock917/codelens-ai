@@ -35,6 +35,7 @@ class ParsedFile:
     error: Optional[str] = None
     display_content: Optional[str] = None
     sections: List[dict] = field(default_factory=list)
+    diagnostics: List[str] = field(default_factory=list)
 
 class BaseParser(ABC):
     @abstractmethod
