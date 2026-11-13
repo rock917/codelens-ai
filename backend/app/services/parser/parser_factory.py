@@ -15,6 +15,9 @@ class ParserFactory:
 
     @classmethod
     def parse_file(cls, file_path: str, content: str, language: str) -> ParsedFile:
+        if language in ('json', 'notebook'):
+            from app.services.documents import parse_document
+            return parse_document(file_path, content, language)
         parser = cls.get_parser(language)
         if not parser:
             from app.services.parser.base_parser import ParsedFile

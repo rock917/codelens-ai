@@ -9,7 +9,7 @@ from app.models.repository import (
 )
 from app.services.file_filter import (
     should_process_file, detect_language,
-    is_binary_file, get_file_size, MAX_FILE_SIZE
+    is_binary_file, get_file_size, file_size_limit
 )
 from app.services.cached_processing import parse as cached_parse, embed as cached_embed, pipeline_version
 from app.services import result_cache
@@ -99,7 +99,7 @@ async def incremental_index(
                 continue
 
             file_size = get_file_size(file_path)
-            if file_size > MAX_FILE_SIZE:
+            if file_size > file_size_limit(file_path):
                 continue
 
             current_paths.add(relative_path)
@@ -156,7 +156,7 @@ async def incremental_index(
         repo.total_chunks = await db.scalar(select(func.count()).select_from(CodeChunk).where(CodeChunk.repository_id == repo_id))
         languages = {}
         for file in files:
-            if file.language not in ('unknown', 'markdown', 'json', 'yaml', 'toml'):
+            if file.language not in ('unknown', 'markdown', 'yaml', 'toml'):
                 languages[file.language] = languages.get(file.language, 0) + 1
         repo.languages = json.dumps(languages)
     await db.commit()
@@ -210,9 +210,12 @@ async def _reprocess_file(
     complexity_score = 0.0
     imports_json = "[]"
 
-    if language in ("python", "javascript", "typescript"):
+    if language in ("python", "javascript", "typescript", "json", "notebook"):
         parsed = await asyncio.to_thread(cached_parse, repo_id, relative_path, content, language)
 
+        if parsed and parsed.display_content is not None:
+            content = parsed.display_content
+            loc = parsed.loc
         if parsed and not parsed.error:
             importance_score, importance_level = calculate_importance_score(
                 parsed, all_paths, 0

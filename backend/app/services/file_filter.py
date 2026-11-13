@@ -15,6 +15,7 @@ IGNORED_DIRS: Set[str] = {
 
 # File extensions to process (source code)
 SUPPORTED_EXTENSIONS: Set[str] = {
+    ".json", ".ipynb",
     ".py", ".js", ".ts", ".jsx", ".tsx",
     ".java", ".c", ".cpp", ".h", ".hpp",
     ".go", ".rs", ".rb", ".php", ".cs",
@@ -48,6 +49,10 @@ IGNORED_EXTENSIONS: Set[str] = {
 
 # Max file size to process (1MB)
 MAX_FILE_SIZE = 1 * 1024 * 1024
+
+def file_size_limit(path: str) -> int:
+    # Notebook containers may be larger because outputs are discarded before indexing.
+    return 10 * MAX_FILE_SIZE if Path(path).suffix.lower() == '.ipynb' else MAX_FILE_SIZE
 
 def should_process_file(file_path: str) -> bool:
     path = Path(file_path)
@@ -102,6 +107,7 @@ def detect_language(file_path: str) -> str:
         ".r": "r",
         ".sql": "sql",
         ".json": "json",
+        ".ipynb": "notebook",
         ".yaml": "yaml",
         ".yml": "yaml",
         ".toml": "toml",

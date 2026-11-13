@@ -336,7 +336,10 @@ export default function Analysis() {
                   summary.analysis_status === 'STALE' ? 'The source index changed. Run analysis to calculate current results.' :
                   summary.analysis_status === 'LEGACY' ? 'These findings are from an earlier scan. Run analysis again to calculate the updated score and coverage.' :
                   summary.coverage ? `${summary.coverage.scanned_files} files scanned · ${summary.coverage.scanned_loc.toLocaleString()} lines · ${summary.coverage.unsupported_files} unsupported files excluded.` : 'No completed scan available.'}
-                {summary.coverage?.scanned_files === 0 && <div>No supported source files. Scanning supports Python, JavaScript and TypeScript.</div>}
+                {summary.coverage?.scanned_files === 0 && <div>No supported source files. Scanning supports Python, JavaScript, TypeScript and valid Python notebook cells. JSON is validated but not health-scored.</div>}
+                {!!summary.coverage?.notebook_cells_scanned && <div>{summary.coverage.notebook_cells_scanned} Python notebook cells scanned · {summary.coverage.notebook_cells_skipped || 0} code cells skipped.</div>}
+                {!!summary.coverage?.json_files_validated && <div>{summary.coverage.json_files_validated} JSON files validated separately; excluded from the health score.</div>}
+                {!!summary.coverage?.exclusions?.length && <details><summary>Validation and coverage details</summary><ul>{summary.coverage.exclusions.map((item, i) => <li key={i}>{item.path}: {item.reason}</li>)}</ul></details>}
                 {summary.health_score != null && <details><summary style={{ cursor: 'pointer' }}>How is health calculated?</summary>
                   Severity-weighted findings per 1,000 scanned lines (minimum 1,000): critical ×15, high ×8, medium ×3, low ×1.
                   Score = 100 / (1 + density / 20), rounded. Critical findings cap the score at 49; high findings at 79.

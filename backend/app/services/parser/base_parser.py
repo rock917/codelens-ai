@@ -33,6 +33,8 @@ class ParsedFile:
     num_classes: int = 0
     num_functions: int = 0
     error: Optional[str] = None
+    display_content: Optional[str] = None
+    sections: List[dict] = field(default_factory=list)
 
 class BaseParser(ABC):
     @abstractmethod

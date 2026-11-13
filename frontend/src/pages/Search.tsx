@@ -12,9 +12,11 @@ import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
 import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
+import json from 'react-syntax-highlighter/dist/esm/languages/hljs/json'
 import { syntaxTheme } from '../theme/syntax'
 
 SyntaxHighlighter.registerLanguage('python', python)
+SyntaxHighlighter.registerLanguage('json', json)
 SyntaxHighlighter.registerLanguage('javascript', javascript)
 SyntaxHighlighter.registerLanguage('typescript', typescript)
 
@@ -57,7 +59,7 @@ function ResultCard({ result, index, onClick, selected }: {
   const getLang = (lang: string) => {
     const map: Record<string, string> = {
       python: 'python', javascript: 'javascript',
-      typescript: 'typescript', jsx: 'javascript', tsx: 'typescript'
+      json: 'json', typescript: 'typescript', jsx: 'javascript', tsx: 'typescript'
     }
     return map[lang] || 'text'
   }
@@ -128,7 +130,7 @@ function ResultCard({ result, index, onClick, selected }: {
             fontFamily: 'monospace', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap'
           }}>
-            {result.file_path} · L{result.start_line}–{result.end_line}
+            {result.file_path} · {result.symbol_type === 'notebook_cell' || result.symbol_type === 'json_path' ? 'view lines ' : 'L'}{result.start_line}–{result.end_line}
           </div>
         </div>
 

@@ -47,6 +47,7 @@ def _chunk_by_lines(
 ) -> List[CodeChunk]:
     chunks = []
     chunk_index = chunk_index_start
+
     for i in range(0, len(lines), MAX_CHUNK_SIZE):
         chunk_lines = lines[i:i + MAX_CHUNK_SIZE]
         content = '\n'.join(chunk_lines)
@@ -113,6 +114,31 @@ def chunk_parsed_file(
     chunks = []
     lines = file_content.splitlines()
     chunk_index = chunk_index_start
+
+    if parsed_file.sections:
+        # Cell/JSON Pointer boundaries are preserved; long values are split to fit
+        # embedding input limits. Line numbers refer to the safe formatted view.
+        lines = (parsed_file.display_content or '').splitlines()
+        for section in parsed_file.sections:
+            buffer, start, end = '', section['start_line'], section['start_line']
+            for number in range(section['start_line'], section['end_line'] + 1):
+                line = lines[number - 1]
+                for offset in range(0, max(1, len(line)), 1400):
+                    fragment = line[offset:offset + 1400]
+                    if buffer and len(buffer) + len(fragment) > 1600:
+                        chunks.append(CodeChunk(repository_id, file_id, parsed_file.path, section['language'],
+                            buffer, start, end, section['name'], section['type'], chunk_index=chunk_index))
+                        chunk_index += 1
+                        buffer = ''
+                    if not buffer:
+                        start = number
+                    buffer += fragment + '\n'
+                    end = number
+            if buffer.strip():
+                chunks.append(CodeChunk(repository_id, file_id, parsed_file.path, section['language'],
+                    buffer.rstrip(), start, end, section['name'], section['type'], chunk_index=chunk_index))
+                chunk_index += 1
+        return chunks
 
     if not parsed_file.symbols:
         chunks.extend(_chunk_by_lines(

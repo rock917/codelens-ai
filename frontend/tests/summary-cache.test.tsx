@@ -16,6 +16,16 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 
+it('still shows document validation when summary generation rejects invalid content', async () => {
+  api.getRepositoryFiles.mockResolvedValue({ data: [{ id: 'file', path: 'broken.json', language: 'json', importance_level: 'LOW', loc: 0 }] })
+  api.getFileSummary.mockRejectedValue(new Error('No indexed content'))
+  api.getFileContent.mockResolvedValue({ data: { content: '', document: { valid: false, searchable: false, content: '', warnings: ['Invalid JSON'], cells: [], sections: [], kernel: null, analysis_label: 'Not scored' } } })
+  await act(async () => { render(<MemoryRouter><Explorer /></MemoryRouter>) })
+  await act(async () => { fireEvent.click(screen.getByText('broken.json')) })
+  expect(screen.getByText('Not indexed: validation failed')).toBeTruthy()
+  expect(screen.getByText('Invalid JSON')).toBeTruthy()
+})
+
 async function openSummary() {
   await act(async () => { render(<MemoryRouter><Explorer /></MemoryRouter>) })
   await act(async () => { fireEvent.click(screen.getByText('sample.py')) })

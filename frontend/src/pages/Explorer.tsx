@@ -11,6 +11,8 @@ import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
 import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
 import { syntaxTheme } from '../theme/syntax'
+import DocumentView from '../components/DocumentView'
+import type { DocumentData } from '../components/DocumentView'
 import TopBar from '../components/layout/TopBar'
 import {
   getRepositories, getRepositoryFiles,
@@ -166,6 +168,7 @@ export default function Explorer() {
   const selection = useRef(0)
   const refreshInFlight = useRef(false)
   const [fileContent, setFileContent] = useState<string>('')
+  const [document, setDocument] = useState<DocumentData | null>(null)
   const [loadingFile, setLoadingFile] = useState(false)
   const [activeTab, setActiveTab] = useState<'code' | 'symbols' | 'info' | 'summary'>('code')
   const [highlightLine, setHighlightLine] = useState<number | null>(null)
@@ -189,6 +192,7 @@ export default function Explorer() {
     setSymbols([])
     setSummary('')
     setFileContent('')
+    setDocument(null)
     try {
       const res = await getRepositoryFiles(repo.id)
       setFiles(res.data)
@@ -202,22 +206,28 @@ export default function Explorer() {
     setSelectedFile(file)
     setLoadingFile(true)
     setFileContent('')
+    setDocument(null)
     setSymbols([])
     setSummary('')
     setActiveTab('code')
     setHighlightLine(null)
 
     try {
-      const [symRes, sumRes, contentRes] = await Promise.all([
+      const [symRes, sumRes, contentRes] = await Promise.allSettled([
         getFileSymbols(file.id),
         getFileSummary(file.id),
         getFileContent(selectedRepo!.id, file.id)
       ])
       if (request !== selection.current) return
-      setSummaryStatus(sumRes.data?.cached ? 'Using saved results' : 'Summary generated')
-      setSymbols(symRes.data)
-      setSummary(sumRes.data?.summary || '')
-      setFileContent(contentRes.data?.content || '')
+      if (symRes.status === 'fulfilled') setSymbols(symRes.value.data)
+      if (sumRes.status === 'fulfilled') {
+        setSummary(sumRes.value.data?.summary || '')
+        setSummaryStatus(sumRes.value.data?.cached ? 'Using saved results' : 'Summary generated')
+      } else setSummaryStatus('Summary unavailable. Check validation notices or retry.')
+      if (contentRes.status === 'fulfilled') {
+        setFileContent(contentRes.value.data?.content || '')
+        setDocument(contentRes.value.data?.document || null)
+      }
     } catch (err) {
       console.error(err)
     } finally {
@@ -248,7 +258,7 @@ export default function Explorer() {
     setHighlightLine(line)
     setActiveTab('code')
     setTimeout(() => {
-      const el = document.getElementById(`line-${line}`)
+      const el = window.document.getElementById(`line-${line}`)
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 100)
   }
@@ -256,7 +266,7 @@ export default function Explorer() {
   const getLang = (lang: string) => {
     const map: Record<string, string> = {
       python: 'python', javascript: 'javascript',
-      typescript: 'typescript', jsx: 'javascript', tsx: 'typescript'
+      json: 'json', typescript: 'typescript', jsx: 'javascript', tsx: 'typescript'
     }
     return map[lang] || 'text'
   }
@@ -474,6 +484,8 @@ export default function Explorer() {
                           style={{ animation: 'spin 1s linear infinite', marginRight: '8px' }} />
                         Loading file...
                       </div>
+                    ) : document ? (
+                      <DocumentView document={document} language={selectedFile.language} highlightLine={highlightLine} />
                     ) : fileContent ? (
                       <div style={{ position: 'relative' }}>
                         <SyntaxHighlighter
@@ -545,6 +557,7 @@ export default function Explorer() {
 
                           return (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              {symbols.filter(s => s.type === 'json_path').map(s => <button key={s.id} className="btn-secondary" style={{ textAlign: 'left' }} onClick={() => jumpToLine(s.start_line)}>{s.name} · L{s.start_line}–{s.end_line}</button>)}
                               {classes.map(cls => (
                                 <div key={cls.id} className="card" style={{ overflow: 'hidden' }}>
                                   <div

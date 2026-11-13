@@ -6,6 +6,7 @@ Real-model mode uses only an already cached model; it does not download one.
 import argparse
 import asyncio
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -239,6 +240,126 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
             response = await self.client.request('DELETE', '/account/deletion', json={'email': 'user-a@example.com', 'confirmation': 'DELETE'})
             self.assertEqual(response.status_code, 200, response.text)
         self.assertFalse(cache.directory(repo).exists())
+
+    async def test_json_notebook_import_search_chat_and_cell_analysis(self):
+        from app.models.repository import CodeChunk
+        notebook = {'nbformat': 4, 'nbformat_minor': 5,
+            'metadata': {'language_info': {'name': 'python'}}, 'cells': [
+                {'cell_type': 'markdown', 'source': ['# Sales forecast\n', 'This explains forecasting.'],
+                 'attachments': {'image.png': {'image/png': 'ATTACHMENT_SECRET'}}},
+                {'cell_type': 'code', 'source': ['def unsafe(value):\n', '    return eval(value)\n'],
+                 'outputs': [{'text': 'OUTPUT_SECRET'}], 'execution_count': 99},
+                {'cell_type': 'code', 'source': '%matplotlib inline\nprint(1)', 'outputs': []},
+            ]}
+        archive_file = io.BytesIO()
+        with zipfile.ZipFile(archive_file, 'w') as zipped:
+            zipped.writestr('forecast.ipynb', json.dumps(notebook))
+            zipped.writestr('settings.json', '{"service":{"name":"forecast","retries":3},"enabled":true}')
+            zipped.writestr('broken.json', '{broken')
+        payload = archive_file.getvalue()
+        result = await self.client.post('/repositories/upload', files={'file': ('documents.zip', payload, 'application/zip')})
+        self.assertEqual(result.status_code, 200, result.text)
+        repo = result.json()['id']
+        status = (await self.client.get(f'/repositories/{repo}/status')).json()
+        self.assertEqual(status['status'], 'READY', status)
+        files = {f['path']: f for f in (await self.client.get(f'/repositories/{repo}/files')).json()}
+        self.assertEqual(set(files), {'forecast.ipynb', 'settings.json', 'broken.json'})
+        views = {}
+        for name, file in files.items():
+            response = await self.client.get(f"/repositories/{repo}/files/{file['id']}/content")
+            self.assertEqual(response.status_code, 200, response.text)
+            views[name] = response.json()['document']
+        nb = views['forecast.ipynb']
+        self.assertTrue(nb['valid'])
+        self.assertTrue(nb['searchable'])
+        self.assertEqual(nb['cells'][1]['number'], 2)
+        self.assertFalse(nb['cells'][2]['analysis_supported'])
+        self.assertNotIn('OUTPUT_SECRET', json.dumps(nb))
+        self.assertNotIn('ATTACHMENT_SECRET', json.dumps(nb))
+        self.assertEqual(views['settings.json']['sections'][0]['name'], '/service')
+        self.assertFalse(views['broken.json']['valid'])
+        self.assertFalse(views['broken.json']['searchable'])
+        self.assertEqual((await self.client.get(f"/summary/file/{files['broken.json']['id']}")).status_code, 422)
+        async with AsyncSessionLocal() as db:
+            chunks = (await db.scalars(select(CodeChunk).where(CodeChunk.repository_id == repo))).all()
+            self.assertTrue(any(c.symbol_name == 'Cell 2 (code)' for c in chunks))
+            self.assertTrue(any(c.symbol_name == '/service' for c in chunks))
+            for chunk in chunks:
+                self.assertNotIn('OUTPUT_SECRET', chunk.content)
+                self.assertNotIn('ATTACHMENT_SECRET', chunk.content)
+                self.assertLessEqual(len(chunk.content), 1601)
+        search = await self.client.post('/search', json={'repository_id': repo, 'query': 'forecast configuration', 'n_results': 20})
+        self.assertEqual(search.status_code, 200, search.text)
+        self.assertTrue(any(r['symbol_type'] == 'json_path' for r in search.json()['results']))
+        chat = await self.client.post('/chat', json={'repository_id': repo, 'question': 'Explain forecasting', 'stream': False})
+        self.assertEqual(chat.status_code, 200, chat.text)
+        self.assertTrue(any(r['symbol_type'] in ('notebook_cell', 'json_path') for r in chat.json()['sources']))
+        for name in ('forecast.ipynb', 'settings.json'):
+            path = f"/summary/file/{files[name]['id']}"
+            self.assertEqual((await self.client.get(path)).status_code, 200)
+            self.assertTrue((await self.client.get(path)).json()['cached'])
+        await self.client.post(f'/analysis/{repo}')
+        summary = (await self.client.get(f'/analysis/{repo}/summary')).json()
+        self.assertEqual(summary['coverage']['notebook_cells_scanned'], 1)
+        self.assertEqual(summary['coverage']['notebook_cells_skipped'], 1)
+        self.assertEqual(summary['coverage']['json_files_validated'], 1)
+        self.assertEqual(summary['coverage']['scanned_loc'], 2)
+        issues = (await self.client.get(f'/analysis/{repo}/issues')).json()
+        finding = next(i for i in issues if i['issue_type'] == 'UNSAFE_EVAL')
+        self.assertTrue(finding['message'].startswith('Cell 2:'))
+        self.assertEqual(finding['line'], nb['cells'][1]['start_line'] + 1)
+        self.assertTrue((await self.client.post(f'/analysis/{repo}')).json()['cached'])
+        reused = await self.client.post('/repositories/upload', files={'file': ('documents.zip', payload, 'application/zip')})
+        self.assertTrue(reused.json()['reused'])
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['used'], 1)
+        self.client.headers['Authorization'] = 'Bearer user-b'
+        self.assertEqual((await self.client.get(f"/repositories/{repo}/files/{files['forecast.ipynb']['id']}/content")).status_code, 404)
+        self.assertEqual((await self.client.post('/search', json={'repository_id': repo, 'query': 'forecast'})).status_code, 404)
+
+    async def test_document_validation_limits_nonpython_and_no_execution(self):
+        from app.services.documents import document_view, parse_document
+        from app.services.chunker import chunk_parsed_file
+        from app.services.file_filter import should_process_file, file_size_limit
+        self.assertTrue(should_process_file('config.json'))
+        self.assertTrue(should_process_file('demo.ipynb'))
+        self.assertEqual(file_size_limit('demo.ipynb'), 10 * 1024 * 1024)
+        for invalid in ('{', '{"a": 1, "a": 2}', '{"a":NaN}', '[' * 80 + '0' + ']' * 80):
+            self.assertFalse(document_view(invalid, 'json')['valid'])
+        value = json.dumps({'a/b~c': 'x' * 5000, 'values': [1, 2, 3]})
+        parsed = parse_document('values.json', value, 'json')
+        self.assertEqual(parsed.sections[0]['name'], '/a~1b~0c')
+        chunks = chunk_parsed_file(parsed, value, 'repo', 'file')
+        self.assertTrue(all(len(c.content) <= 1601 for c in chunks))
+        for c in chunks:
+            self.assertGreaterEqual(c.start_line, 1)
+            self.assertLessEqual(c.end_line, parsed.loc)
+        marker = Path(settings.UPLOAD_DIR) / 'must-not-exist'
+        nb = {'nbformat': 4, 'metadata': {'language_info': {'name': 'python'}}, 'cells': [
+            {'cell_type': 'code', 'source': f'from pathlib import Path\nPath({str(marker)!r}).touch()', 'outputs': []}]}
+        self.assertTrue(document_view(json.dumps(nb), 'notebook')['analysis_supported'])
+        self.assertFalse(marker.exists())
+        nb['metadata']['language_info']['name'] = 'julia'
+        view = document_view(json.dumps(nb), 'notebook')
+        self.assertTrue(view['valid'])
+        self.assertFalse(view['analysis_supported'])
+        self.assertTrue(view['sections'])
+        nb['nbformat'] = 3
+        self.assertFalse(document_view(json.dumps(nb), 'notebook')['valid'])
+        for cells in ([{'cell_type': 'code', 'source': [2]}], [None], [{}] * 1001):
+            nb['nbformat'], nb['cells'] = 4, cells
+            self.assertFalse(document_view(json.dumps(nb), 'notebook')['valid'])
+
+    async def test_json_only_repository_has_no_code_health_score(self):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as zipped:
+            zipped.writestr('config.json', '{"enabled":true}')
+        result = await self.client.post('/repositories/upload', files={'file': ('json.zip', output.getvalue(), 'application/zip')})
+        repo = result.json()['id']
+        await self.client.post(f'/analysis/{repo}')
+        health = (await self.client.get(f'/analysis/{repo}/summary')).json()
+        self.assertIsNone(health['health_score'])
+        self.assertEqual(health['coverage']['scanned_files'], 0)
+        self.assertEqual(health['coverage']['json_files_validated'], 1)
 
     def enable_deletion(self):
         import time

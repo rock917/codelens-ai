@@ -389,7 +389,7 @@ function SourceCard({
           flexShrink: 0,
         }}
       >
-        L{source.start_line}-{source.end_line}
+        {source.symbol_type === 'notebook_cell' || source.symbol_type === 'json_path' ? 'view lines ' : 'L'}{source.start_line}-{source.end_line}
       </span>
     </div>
   )

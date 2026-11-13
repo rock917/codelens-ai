@@ -320,12 +320,20 @@ async def get_file_content(
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
+        document = None
+        if file.language in ('json', 'notebook'):
+            from app.services.documents import document_view
+            document = await asyncio.to_thread(document_view, content, file.language)
+            content = document['content']
+            from app.models.repository import CodeChunk
+            document['searchable'] = bool(await db.scalar(select(CodeChunk.id).where(CodeChunk.file_id == file_id).limit(1)))
         return {
             "file_id": file_id,
             "path": file.path,
             "language": file.language,
             "content": content,
-            "loc": file.loc
+            "loc": file.loc,
+            "document": document
         }
     except Exception as e:
         raise HTTPException(500, f"Could not read file: {str(e)}")

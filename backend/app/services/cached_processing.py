@@ -14,7 +14,7 @@ def pipeline_version():
         'parser/base_parser.py', 'parser/python_parser.py', 'parser/js_parser.py',
         'parser/parser_factory.py', 'chunker.py', 'embedding_service.py',
         'file_filter.py', 'importance_scorer.py', 'cached_processing.py',
-        'repository_service.py', 'incremental_indexer.py', 'vector_indexing.py', '../../requirements.txt'))
+        'repository_service.py', 'incremental_indexer.py', 'vector_indexing.py', 'documents.py', '../../requirements.txt'))
 
 
 def parse(repo_id, path, content, language):

@@ -23,7 +23,7 @@ from app.services.file_filter import (
     detect_language,
     is_binary_file,
     get_file_size,
-    MAX_FILE_SIZE,
+    file_size_limit,
 )
 
 from app.services.cached_processing import parse as cached_parse, pipeline_version
@@ -319,7 +319,7 @@ async def index_directory(
                 file_path
             )
 
-            if file_size > MAX_FILE_SIZE:
+            if file_size > file_size_limit(file_path):
                 continue
 
             language = detect_language(
@@ -377,7 +377,7 @@ async def index_directory(
         if lang in (
             "python",
             "javascript",
-            "typescript",
+            "typescript", "json", "notebook",
         ):
 
             parsed = await asyncio.to_thread(
@@ -387,6 +387,12 @@ async def index_directory(
                 content,
                 lang,
             )
+
+            if parsed and parsed.display_content is not None:
+                total_loc -= loc
+                loc = parsed.loc
+                total_loc += loc
+                content = parsed.display_content
 
             if parsed and not parsed.error:
 
@@ -415,7 +421,6 @@ async def index_directory(
         if lang not in (
             "unknown",
             "markdown",
-            "json",
             "yaml",
             "toml",
         ):

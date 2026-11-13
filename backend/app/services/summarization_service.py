@@ -146,6 +146,14 @@ async def file_summary_result(db, file_id, force=False):
     inputs = dict(file_path=file.path, language=file.language or 'unknown',
                   symbols=[dict(name=s.name, type=s.type, parent_name=s.parent_name) for s in symbols],
                   imports=json.loads(file.imports or '[]'), loc=file.loc or 0)
+    if file.language in ('json', 'notebook'):
+        from app.models.repository import CodeChunk
+        from fastapi import HTTPException
+        chunks = (await db.scalars(select(CodeChunk).where(CodeChunk.file_id == file_id)
+                                  .order_by(CodeChunk.chunk_index).limit(4))).all()
+        if not chunks:
+            raise HTTPException(422, 'No indexed content to summarize. Check file validation in Explorer.')
+        inputs['sample_code'] = '\n'.join(f'{c.symbol_name}:\n{c.content}' for c in chunks)[:4000]
     key = cache.fingerprint('file-summary', summary_version(), file.hash, inputs)
     async def produce():
         return await summarize_file(**inputs)
