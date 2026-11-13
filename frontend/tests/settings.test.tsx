@@ -32,7 +32,7 @@ it('requires both email and DELETE and supports cancellation', async () => {
   expect((screen.getByText('Permanently Delete Account') as HTMLButtonElement).disabled).toBe(false)
   fireEvent.click(screen.getByText('Permanently Delete Account'))
   await waitFor(() => expect(mocks.deleteAccount).toHaveBeenCalledWith('owner@example.com', 'DELETE'))
-  expect(await screen.findByRole('status')).toHaveProperty('textContent', expect.stringContaining('Deletion is in progress'))
+  expect((await screen.findByText(/Deletion is in progress/)).getAttribute('role')).toBe('status')
 })
 it('requires reauthentication for an old sign-in', async () => {
   mocks.getDeletionStatus.mockResolvedValue({ data: { enabled: true, pending: false, recent_sign_in: false } })

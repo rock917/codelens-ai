@@ -437,8 +437,8 @@ function MessageBubble({
           height: '32px',
           borderRadius: '8px',
           background: isUser
-            ? 'linear-gradient(135deg, #6366f1, #7c3aed)'
-            : 'linear-gradient(135deg, #111118, #1e1e2e)',
+            ? 'var(--brand-gradient)'
+            : 'linear-gradient(135deg, var(--bg-surface), var(--border))',
           border:
             '1px solid var(--border-bright)',
           display: 'flex',
@@ -446,12 +446,12 @@ function MessageBubble({
           justifyContent: 'center',
           flexShrink: 0,
           boxShadow: isUser
-            ? '0 0 12px rgba(99,102,241,0.3)'
+            ? '0 0 12px color-mix(in srgb,var(--primary) 30%,transparent)'
             : 'none',
         }}
       >
         {isUser ? (
-          <User size={14} color="white" />
+          <User size={14} color="var(--on-primary)" />
         ) : (
           <Zap
             size={14}
@@ -493,12 +493,12 @@ function MessageBubble({
               ? '12px 4px 12px 12px'
               : '4px 12px 12px 12px',
             background: isUser
-              ? 'linear-gradient(135deg, #6366f1, #7c3aed)'
+              ? 'var(--brand-gradient)'
               : 'var(--bg-surface)',
             border: isUser
               ? 'none'
               : '1px solid var(--border)',
-            color: 'var(--text)',
+            color: isUser ? 'var(--on-primary)' : 'var(--text)',
             fontSize: '13px',
             lineHeight: '1.6',
             wordBreak: 'break-word',
@@ -538,7 +538,7 @@ function MessageBubble({
                     margin:
                       '14px 0 8px',
                     color:
-                      'var(--text)',
+                      'inherit',
                     lineHeight:
                       '1.35',
                   }}
@@ -557,7 +557,7 @@ function MessageBubble({
                     margin:
                       '14px 0 8px',
                     color:
-                      'var(--text)',
+                      'inherit',
                     lineHeight:
                       '1.4',
                   }}
@@ -576,7 +576,7 @@ function MessageBubble({
                     margin:
                       '12px 0 6px',
                     color:
-                      'var(--text)',
+                      'inherit',
                     lineHeight:
                       '1.4',
                   }}
@@ -595,7 +595,7 @@ function MessageBubble({
                     margin:
                       '10px 0 6px',
                     color:
-                      'var(--text)',
+                      'inherit',
                   }}
                   {...props}
                 />
@@ -613,7 +613,7 @@ function MessageBubble({
                   style={{
                     fontWeight: '650',
                     color:
-                      'var(--text)',
+                      'inherit',
                   }}
                   {...props}
                 />
@@ -630,7 +630,7 @@ function MessageBubble({
                 <em
                   style={{
                     color:
-                      'var(--text)',
+                      'inherit',
                   }}
                   {...props}
                 />
@@ -810,7 +810,7 @@ function MessageBubble({
                 <a
                   style={{
                     color:
-                      'var(--primary)',
+                      isUser ? 'var(--on-primary)' : 'var(--primary)',
                     textDecoration:
                       'underline',
                     textUnderlineOffset:
@@ -865,6 +865,7 @@ function MessageBubble({
                 >
                   <table
                     style={{
+                      background: 'var(--bg-base)',
                       borderCollapse:
                         'collapse',
                       width: '100%',
@@ -987,7 +988,7 @@ function MessageBubble({
                 <del
                   style={{
                     color:
-                      'var(--text-muted)',
+                      isUser ? 'var(--on-primary)' : 'var(--text-muted)',
                   }}
                   {...props}
                 />
@@ -1093,7 +1094,7 @@ function TypingIndicator() {
           height: '32px',
           borderRadius: '8px',
           background:
-            'linear-gradient(135deg, #111118, #1e1e2e)',
+            'linear-gradient(135deg, var(--bg-surface), var(--border))',
           border:
             '1px solid var(--border-bright)',
           display: 'flex',

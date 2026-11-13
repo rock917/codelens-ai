@@ -12,6 +12,7 @@ import Explorer from './pages/Explorer'
 import SearchPage from './pages/Search'
 import Settings from './pages/Settings'
 import { ToastProvider } from './components/ui/AccountFeedback'
+import { ThemeProvider } from './theme/ThemeProvider'
 
 function PrivateWorkspace() {
   const { session, loading } = useAuth()
@@ -45,10 +46,10 @@ function PrivateWorkspace() {
   )
 }
 export default function App() {
-  return <BrowserRouter><ToastProvider><AuthProvider><Routes>
+  return <BrowserRouter><ToastProvider><AuthProvider><ThemeProvider><Routes>
     <Route path="/login" element={<Login />} />
     <Route path="/auth/callback" element={<AuthCallback />} />
     <Route path="/reset-password" element={<ResetPassword />} />
     <Route path="/*" element={<PrivateWorkspace />} />
-  </Routes></AuthProvider></ToastProvider></BrowserRouter>
+  </Routes></ThemeProvider></AuthProvider></ToastProvider></BrowserRouter>
 }

@@ -2,6 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Apply the last validated palette before styles or React paint.
+      try {
+        var theme = localStorage.getItem('codelens.theme.v1.last');
+        if (!['midnight-violet', 'cyber-cyan', 'emerald-matrix', 'arctic-light'].includes(theme)) theme = 'midnight-violet';
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme === 'arctic-light' ? 'light' : 'dark';
+      } catch (_) { document.documentElement.dataset.theme = 'midnight-violet'; }
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Explore repositories, find code issues, and ask questions about your code in your own CodeLens AI workspace." />

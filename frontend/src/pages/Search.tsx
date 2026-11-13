@@ -12,7 +12,7 @@ import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
 import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
-import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
+import { syntaxTheme } from '../theme/syntax'
 
 SyntaxHighlighter.registerLanguage('python', python)
 SyntaxHighlighter.registerLanguage('javascript', javascript)
@@ -29,7 +29,7 @@ const EXAMPLE_QUERIES = [
 
 function ScoreBar({ score }: { score: number }) {
   const pct = Math.round(score * 100)
-  const color = pct >= 40 ? '#22c55e' : pct >= 20 ? '#f59e0b' : '#64748b'
+  const color = pct >= 40 ? 'var(--success)' : pct >= 20 ? 'var(--warning)' : 'var(--text-muted)'
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
       <div style={{
@@ -83,9 +83,9 @@ function ResultCard({ result, index, onClick, selected }: {
         {/* Rank */}
         <div style={{
           width: '22px', height: '22px', borderRadius: '6px',
-          background: selected ? 'var(--primary)' : 'var(--border)',
+          background: selected ? 'var(--primary-strong)' : 'var(--bg-surface)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '10px', fontWeight: '800', color: 'white',
+          fontSize: '10px', fontWeight: '800', color: selected ? 'var(--on-primary)' : 'var(--text)',
           flexShrink: 0, fontFamily: 'monospace'
         }}>
           {index + 1}
@@ -115,7 +115,7 @@ function ResultCard({ result, index, onClick, selected }: {
                 </span>
                 <span style={{
                   fontSize: '10px', padding: '1px 6px',
-                  borderRadius: '3px', background: 'rgba(99,102,241,0.1)',
+                  borderRadius: '3px', background: 'color-mix(in srgb,var(--primary) 10%,transparent)',
                   color: 'var(--primary)', fontFamily: 'monospace'
                 }}>
                   {result.symbol_type}
@@ -148,18 +148,18 @@ function ResultCard({ result, index, onClick, selected }: {
       <div style={{ maxHeight: selected ? '400px' : '120px', overflow: 'hidden', transition: 'max-height 0.3s ease' }}>
         <SyntaxHighlighter
           language={getLang(result.language)}
-          style={atomOneDark}
+          style={syntaxTheme}
           showLineNumbers
           startingLineNumber={result.start_line}
           customStyle={{
             margin: 0, borderRadius: 0,
-            background: '#0a0a0f',
+            background: 'var(--bg-base)',
             fontSize: '11px', lineHeight: '1.5',
             fontFamily: 'JetBrains Mono, monospace',
             padding: '10px 14px'
           }}
           lineNumberStyle={{
-            color: '#334155', minWidth: '36px',
+            color: 'var(--text-dim)', minWidth: '36px',
             paddingRight: '12px', userSelect: 'none'
           }}
         >
@@ -319,7 +319,7 @@ export default function SearchPage() {
               {results.length > 0 && (
                 <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   Top score:{' '}
-                  <span style={{ color: '#22c55e', fontWeight: '700' }}>
+                  <span style={{ color: 'var(--success)', fontWeight: '700' }}>
                     {Math.round(results[0].score * 100)}%
                   </span>
                 </div>
@@ -361,12 +361,12 @@ export default function SearchPage() {
                   onClick={() => handleSearch()}
                   disabled={searching}
                   style={{
-                    background: 'linear-gradient(135deg, #6366f1, #7c3aed)',
+                    background: 'var(--brand-gradient)',
                     border: 'none', borderRadius: '6px',
-                    padding: '6px 14px', color: 'white',
+                    padding: '6px 14px', color: 'var(--on-primary)',
                     cursor: 'pointer', fontSize: '12px', fontWeight: '600',
                     display: 'flex', alignItems: 'center', gap: '6px',
-                    flexShrink: 0, boxShadow: '0 0 12px rgba(99,102,241,0.3)'
+                    flexShrink: 0, boxShadow: '0 0 12px color-mix(in srgb,var(--primary) 30%,transparent)'
                   }}
                 >
                   {searching
@@ -391,12 +391,12 @@ export default function SearchPage() {
               }}>
                 <div style={{
                   width: '56px', height: '56px', borderRadius: '14px',
-                  background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                  background: 'var(--brand-gradient)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   marginBottom: '16px',
-                  boxShadow: '0 0 30px rgba(99,102,241,0.3)'
+                  boxShadow: '0 0 30px color-mix(in srgb,var(--primary) 30%,transparent)'
                 }}>
-                  <Search size={24} color="white" />
+                  <Search size={24} color="var(--on-primary)" />
                 </div>
                 <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '8px' }}>
                   Semantic Code Search
@@ -446,12 +446,12 @@ export default function SearchPage() {
               }}>
                 <div style={{
                   width: '48px', height: '48px', borderRadius: '12px',
-                  background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                  background: 'var(--brand-gradient)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 0 20px rgba(99,102,241,0.3)',
+                  boxShadow: '0 0 20px color-mix(in srgb,var(--primary) 30%,transparent)',
                   animation: 'pulse-glow 2s infinite'
                 }}>
-                  <Search size={20} color="white" />
+                  <Search size={20} color="var(--on-primary)" />
                 </div>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '4px' }}>
@@ -526,8 +526,8 @@ export default function SearchPage() {
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes pulse-glow {
-          0%, 100% { box-shadow: 0 0 10px rgba(99,102,241,0.3); }
-          50% { box-shadow: 0 0 30px rgba(99,102,241,0.6); }
+          0%, 100% { box-shadow: 0 0 10px color-mix(in srgb,var(--primary) 30%,transparent); }
+          50% { box-shadow: 0 0 30px color-mix(in srgb,var(--primary) 60%,transparent); }
         }
       `}</style>
     </div>

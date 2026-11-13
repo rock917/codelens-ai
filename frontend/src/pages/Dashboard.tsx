@@ -19,7 +19,7 @@ function StatCard({ icon: Icon, label, value, color = 'var(--primary)', sub }: a
         </div>
         <div style={{
           width: '32px', height: '32px', borderRadius: '8px',
-          background: `${color}20`,
+          background: `color-mix(in srgb, ${color} 12%, transparent)`,
           display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>
           <Icon size={15} color={color} />
@@ -48,8 +48,8 @@ function StatusBadge({ status }: { status: string }) {
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: '4px',
       padding: '2px 8px', borderRadius: '9999px', fontSize: '11px',
-      fontWeight: '500', background: `${c.color}15`, color: c.color,
-      border: `1px solid ${c.color}30`
+      fontWeight: '500', background: `color-mix(in srgb, ${c.color} 8%, transparent)`, color: c.color,
+      border: `1px solid color-mix(in srgb, ${c.color} 19%, transparent)`
     }}>
       <Icon size={10} />
       {c.label}
@@ -142,11 +142,11 @@ export default function Dashboard() {
           }}>
             <div style={{
               width: '64px', height: '64px', borderRadius: '16px',
-              background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+              background: 'var(--brand-gradient)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              marginBottom: '24px', boxShadow: '0 0 40px rgba(99,102,241,0.3)'
+              marginBottom: '24px', boxShadow: '0 0 40px color-mix(in srgb,var(--primary) 30%,transparent)'
             }}>
-              <Zap size={28} color="white" />
+              <Zap size={28} color="var(--on-primary)" />
             </div>
             <h2 style={{ fontSize: '22px', fontWeight: '700', marginBottom: '8px' }}>
               Welcome to CodeLens AI
@@ -173,7 +173,7 @@ export default function Dashboard() {
               <StatCard icon={FileCode} label="Total Files" value={totalFiles.toLocaleString()}
                 sub="across all repos" color="var(--accent)" />
               <StatCard icon={Layers} label="Lines of Code" value={totalLOC.toLocaleString()}
-                sub="indexed" color="#22c55e" />
+                sub="indexed" color="var(--success)" />
               <StatCard icon={AlertTriangle} label="Issues Found" value={totalIssues}
                 sub="across all repos" color="var(--warning)" />
             </div>
@@ -208,7 +208,7 @@ export default function Dashboard() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                           <div style={{
                             width: '36px', height: '36px', borderRadius: '8px',
-                            background: 'linear-gradient(135deg, #6366f120, #a855f720)',
+                            background: 'linear-gradient(135deg, color-mix(in srgb,var(--primary) 12.5%,transparent), color-mix(in srgb,var(--accent) 12.5%,transparent))',
                             border: '1px solid var(--border-bright)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center'
                           }}>

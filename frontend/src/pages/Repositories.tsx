@@ -17,12 +17,12 @@ import type { Repository } from '../types'
 import ProgressTracker from '../components/ProgressTracker'
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { color: string, icon: any, label: string }> = {
-    READY:     { color: '#22c55e', icon: CheckCircle, label: 'Ready' },
-    FAILED:    { color: '#ef4444', icon: XCircle,     label: 'Failed' },
-    UPLOADING: { color: '#6366f1', icon: Loader,      label: 'Uploading' },
-    PARSING:   { color: '#6366f1', icon: Loader,      label: 'Parsing' },
-    INDEXING:  { color: '#6366f1', icon: Loader,      label: 'Indexing' },
-    ANALYZING: { color: '#f59e0b', icon: Loader,      label: 'Analyzing' },
+    READY:     { color: 'var(--success)', icon: CheckCircle, label: 'Ready' },
+    FAILED:    { color: 'var(--danger)', icon: XCircle,     label: 'Failed' },
+    UPLOADING: { color: 'var(--primary)', icon: Loader,      label: 'Uploading' },
+    PARSING:   { color: 'var(--primary)', icon: Loader,      label: 'Parsing' },
+    INDEXING:  { color: 'var(--primary)', icon: Loader,      label: 'Indexing' },
+    ANALYZING: { color: 'var(--warning)', icon: Loader,      label: 'Analyzing' },
   }
   const c = config[status] || config.READY
   const Icon = c.icon
@@ -30,8 +30,8 @@ function StatusBadge({ status }: { status: string }) {
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: '4px',
       padding: '3px 10px', borderRadius: '9999px', fontSize: '11px',
-      fontWeight: '500', background: `${c.color}15`,
-      color: c.color, border: `1px solid ${c.color}30`
+      fontWeight: '500', background: `color-mix(in srgb, ${c.color} 8%, transparent)`,
+      color: c.color, border: `1px solid color-mix(in srgb, ${c.color} 19%, transparent)`
     }}>
       <Icon size={10} />
       {c.label}
@@ -90,14 +90,14 @@ export function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuc
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+      position: 'fixed', inset: 0, background: 'var(--overlay)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       zIndex: 100, backdropFilter: 'blur(4px)'
     }}>
       <div className="card animate-fade-in" style={{
         width: '480px', padding: '24px',
         border: '1px solid var(--border-bright)',
-        boxShadow: '0 0 40px rgba(99,102,241,0.15)'
+        boxShadow: '0 0 40px color-mix(in srgb,var(--primary) 15%,transparent)'
       }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
@@ -125,7 +125,7 @@ export function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuc
               background: tab === t ? 'var(--bg-surface)' : 'transparent',
               color: tab === t ? 'var(--text)' : 'var(--text-muted)',
               transition: 'all 0.15s',
-              boxShadow: tab === t ? '0 1px 4px rgba(0,0,0,0.3)' : 'none'
+              boxShadow: tab === t ? '0 1px 4px var(--shadow)' : 'none'
             }}>
               {t === 'zip' ? '📦 ZIP Upload' : '🐙 GitHub URL'}
             </button>
@@ -198,8 +198,8 @@ export function UploadModal({ onClose, onSuccess }: { onClose: () => void, onSuc
         {error && (
           <div style={{
             marginTop: '12px', padding: '8px 12px', borderRadius: '6px',
-            background: 'rgba(239,68,68,0.1)', color: '#ef4444',
-            fontSize: '12px', border: '1px solid rgba(239,68,68,0.2)'
+            background: 'color-mix(in srgb,var(--danger) 10%,transparent)', color: 'var(--danger)',
+            fontSize: '12px', border: '1px solid color-mix(in srgb,var(--danger) 20%,transparent)'
           }}>
             {error}
           </div>
@@ -348,7 +348,7 @@ export default function Repositories() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <div style={{
                       width: '40px', height: '40px', borderRadius: '10px',
-                      background: 'linear-gradient(135deg, #6366f120, #a855f720)',
+                      background: 'linear-gradient(135deg, color-mix(in srgb,var(--primary) 12.5%,transparent), color-mix(in srgb,var(--accent) 12.5%,transparent))',
                       border: '1px solid var(--border-bright)',
                       display: 'flex', alignItems: 'center', justifyContent: 'center'
                     }}>

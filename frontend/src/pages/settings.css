@@ -5,35 +5,35 @@
   min-height: 44px;
   margin: 8px 0 16px;
   padding: 10px 12px;
-  border: 1px solid #777286;
+  border: 1px solid var(--border-bright);
   border-radius: 8px;
-  background: #0c0b12;
-  color: #f4f2fa;
+  background: var(--bg-base);
+  color: var(--text);
   font: inherit;
 }
-.account-settings .deletion-input::placeholder { color: #aaa5b9; }
+.account-settings .deletion-input::placeholder { color: var(--text-muted); }
 .account-settings .btn {
   min-height: 44px;
   padding: 10px 16px;
-  border: 1px solid #777286;
+  border: 1px solid var(--border-bright);
   border-radius: 8px;
-  background: #24212e;
-  color: #f4f2fa;
+  background: var(--bg-elevated);
+  color: var(--text);
   cursor: pointer;
 }
 .account-settings .deletion-submit:not(:disabled) {
-  background: #a8273c;
-  border-color: #ed7890;
-  color: #fff;
+  background: var(--danger-strong);
+  border-color: var(--danger);
+  color: var(--on-primary);
 }
 .account-settings .btn:disabled {
-  background: #25232b;
-  color: #a49eae;
-  border-color: #48424f;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border-color: var(--border);
   cursor: not-allowed;
 }
 .account-settings :is(input, button):focus-visible {
-  outline: 2px solid #c4b5fd;
+  outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
 .account-settings .btn:hover:not(:disabled) { filter: brightness(1.15); }

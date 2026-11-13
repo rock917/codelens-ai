@@ -16,21 +16,21 @@ const DOC_TYPES = [
     label: 'README',
     icon: BookOpen,
     description: 'Complete README with features, setup, and usage',
-    color: '#22c55e'
+    color: 'var(--success)'
   },
   {
     id: 'architecture',
     label: 'Architecture',
     icon: Layout,
     description: 'System design, components, and data flow',
-    color: '#6366f1'
+    color: 'var(--primary)'
   },
   {
     id: 'api',
     label: 'API Docs',
     icon: Code2,
     description: 'API endpoints, functions, and parameters',
-    color: '#a855f7'
+    color: 'var(--accent)'
   },
 ]
 
@@ -128,14 +128,14 @@ export default function DocsGen() {
                 style={{
                   display: 'flex', alignItems: 'flex-start', gap: '10px',
                   padding: '10px', borderRadius: '8px',
-                  border: `1px solid ${selectedType === id ? color + '50' : 'var(--border)'}`,
-                  background: selectedType === id ? color + '10' : 'transparent',
+                  border: `1px solid ${selectedType === id ? `color-mix(in srgb, ${color} 32%, transparent)` : 'var(--border)'}`,
+                  background: selectedType === id ? `color-mix(in srgb, ${color} 6%, transparent)` : 'transparent',
                   cursor: 'pointer', width: '100%', textAlign: 'left',
                   transition: 'all 0.15s', marginBottom: '6px'
                 }}>
                 <div style={{
                   width: '28px', height: '28px', borderRadius: '6px',
-                  background: color + '20', display: 'flex',
+                  background: `color-mix(in srgb, ${color} 12%, transparent)`, display: 'flex',
                   alignItems: 'center', justifyContent: 'center', flexShrink: 0
                 }}>
                   <Icon size={13} color={color} />
@@ -184,7 +184,7 @@ export default function DocsGen() {
             }}>
               <div style={{
                 width: '64px', height: '64px', borderRadius: '16px',
-                background: 'linear-gradient(135deg, #6366f120, #a855f720)',
+                background: 'linear-gradient(135deg, color-mix(in srgb,var(--primary) 12.5%,transparent), color-mix(in srgb,var(--accent) 12.5%,transparent))',
                 border: '1px solid var(--border-bright)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 marginBottom: '16px'
@@ -207,12 +207,12 @@ export default function DocsGen() {
             }}>
               <div style={{
                 width: '56px', height: '56px', borderRadius: '14px',
-                background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                background: 'var(--brand-gradient)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: '0 0 30px rgba(99,102,241,0.3)',
+                boxShadow: '0 0 30px color-mix(in srgb,var(--primary) 30%,transparent)',
                 animation: 'pulse-glow 2s infinite'
               }}>
-                <Zap size={24} color="white" />
+                <Zap size={24} color="var(--on-primary)" />
               </div>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '6px' }}>
@@ -241,10 +241,10 @@ export default function DocsGen() {
                       <>
                         <div style={{
                           width: '28px', height: '28px', borderRadius: '6px',
-                          background: (docType?.color || '#6366f1') + '20',
+                          background: `color-mix(in srgb, ${docType?.color || 'var(--primary)'} 12%, transparent)`,
                           display: 'flex', alignItems: 'center', justifyContent: 'center'
                         }}>
-                          <Icon size={13} color={docType?.color || '#6366f1'} />
+                          <Icon size={13} color={docType?.color || 'var(--primary)'} />
                         </div>
                         <div>
                           <div style={{ fontSize: '13px', fontWeight: '700' }}>
@@ -372,8 +372,8 @@ export default function DocsGen() {
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes pulse-glow {
-          0%, 100% { box-shadow: 0 0 10px rgba(99,102,241,0.3); }
-          50% { box-shadow: 0 0 30px rgba(99,102,241,0.6); }
+          0%, 100% { box-shadow: 0 0 10px color-mix(in srgb,var(--primary) 30%,transparent); }
+          50% { box-shadow: 0 0 30px color-mix(in srgb,var(--primary) 60%,transparent); }
         }
       `}</style>
     </div>

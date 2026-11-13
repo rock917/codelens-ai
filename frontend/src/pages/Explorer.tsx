@@ -10,7 +10,7 @@ import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
 import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
-import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
+import { syntaxTheme } from '../theme/syntax'
 import TopBar from '../components/layout/TopBar'
 import {
   getRepositories, getRepositoryFiles,
@@ -68,7 +68,7 @@ function buildTree(files: FileRecord[]): TreeNode[] {
 
 function importanceDot(level: string) {
   const colors: Record<string, string> = {
-    HIGH: '#22c55e', MEDIUM: '#f59e0b', LOW: '#334155'
+    HIGH: 'var(--success)', MEDIUM: 'var(--warning)', LOW: 'var(--text-dim)'
   }
   return (
     <div style={{
@@ -114,15 +114,15 @@ function TreeNodeItem({ node, depth, selectedFile, onSelect }: {
               : <ChevronRight size={11} style={{ flexShrink: 0 }} />
             }
             {open
-              ? <FolderOpen size={12} color="#f59e0b" style={{ flexShrink: 0 }} />
-              : <Folder size={12} color="#f59e0b" style={{ flexShrink: 0 }} />
+              ? <FolderOpen size={12} color="var(--warning)" style={{ flexShrink: 0 }} />
+              : <Folder size={12} color="var(--warning)" style={{ flexShrink: 0 }} />
             }
           </>
         ) : (
           <>
             <div style={{ width: '11px', flexShrink: 0 }} />
             <FileCode size={12}
-              color={isSelected ? 'var(--primary)' : '#64748b'}
+              color={isSelected ? 'var(--primary)' : 'var(--text-muted)'}
               style={{ flexShrink: 0 }}
             />
           </>
@@ -233,7 +233,7 @@ export default function Explorer() {
   }
 
   const importanceColor = (level: string) =>
-    level === 'HIGH' ? '#22c55e' : level === 'MEDIUM' ? '#f59e0b' : '#64748b'
+    level === 'HIGH' ? 'var(--success)' : level === 'MEDIUM' ? 'var(--warning)' : 'var(--text-muted)'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -275,8 +275,8 @@ export default function Explorer() {
             }}>
               {[
                 { label: 'Files', value: files.length, color: 'var(--text)' },
-                { label: 'HIGH', value: files.filter(f => f.importance_level === 'HIGH').length, color: '#22c55e' },
-                { label: 'MED', value: files.filter(f => f.importance_level === 'MEDIUM').length, color: '#f59e0b' },
+                { label: 'HIGH', value: files.filter(f => f.importance_level === 'HIGH').length, color: 'var(--success)' },
+                { label: 'MED', value: files.filter(f => f.importance_level === 'MEDIUM').length, color: 'var(--warning)' },
               ].map(({ label, value, color }) => (
                 <div key={label} style={{ textAlign: 'center', flex: 1 }}>
                   <div style={{ fontSize: '14px', fontWeight: '700', fontFamily: 'monospace', color }}>
@@ -295,7 +295,7 @@ export default function Explorer() {
             padding: '5px 12px', borderBottom: '1px solid var(--border)',
             display: 'flex', gap: '10px', alignItems: 'center'
           }}>
-            {[{ color: '#22c55e', label: 'High' }, { color: '#f59e0b', label: 'Med' }, { color: '#334155', label: 'Low' }]
+            {[{ color: 'var(--success)', label: 'High' }, { color: 'var(--warning)', label: 'Med' }, { color: 'var(--text-dim)', label: 'Low' }]
               .map(({ color, label }) => (
                 <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: color }} />
@@ -326,7 +326,7 @@ export default function Explorer() {
             }}>
               <div style={{
                 width: '64px', height: '64px', borderRadius: '16px',
-                background: 'linear-gradient(135deg, #6366f120, #a855f720)',
+                background: 'linear-gradient(135deg, color-mix(in srgb,var(--primary) 12.5%,transparent), color-mix(in srgb,var(--accent) 12.5%,transparent))',
                 border: '1px solid var(--border-bright)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 marginBottom: '16px'
@@ -348,7 +348,7 @@ export default function Explorer() {
                   {[
                     { icon: FileCode, label: 'Total Files', value: files.length, color: 'var(--primary)' },
                     { icon: Layers, label: 'Total LOC', value: files.reduce((s, f) => s + f.loc, 0).toLocaleString(), color: 'var(--accent)' },
-                    { icon: Star, label: 'High Priority', value: files.filter(f => f.importance_level === 'HIGH').length, color: '#22c55e' },
+                    { icon: Star, label: 'High Priority', value: files.filter(f => f.importance_level === 'HIGH').length, color: 'var(--success)' },
                   ].map(({ icon: Icon, label, value, color }) => (
                     <div key={label} className="card" style={{ padding: '14px', textAlign: 'center' }}>
                       <Icon size={16} color={color} style={{ marginBottom: '6px' }} />
@@ -449,7 +449,7 @@ export default function Explorer() {
                       <div style={{ position: 'relative' }}>
                         <SyntaxHighlighter
                           language={getLang(selectedFile.language)}
-                          style={atomOneDark}
+                          style={syntaxTheme}
                           showLineNumbers
                           wrapLines
                           lineProps={(lineNumber: number) => ({
@@ -457,7 +457,7 @@ export default function Explorer() {
                             style: {
                               display: 'block',
                               background: highlightLine === lineNumber
-                                ? 'rgba(99,102,241,0.2)' : 'transparent',
+                                ? 'color-mix(in srgb,var(--primary) 20%,transparent)' : 'transparent',
                               borderLeft: highlightLine === lineNumber
                                 ? '3px solid var(--primary)' : '3px solid transparent',
                               transition: 'background 0.3s'
@@ -465,14 +465,14 @@ export default function Explorer() {
                           })}
                           customStyle={{
                             margin: 0, borderRadius: 0,
-                            background: '#0a0a0f',
+                            background: 'var(--bg-base)',
                             fontSize: '12px',
                             lineHeight: '1.6',
                             minHeight: '100%',
                             fontFamily: 'JetBrains Mono, monospace'
                           }}
                           lineNumberStyle={{
-                            color: '#334155', minWidth: '40px',
+                            color: 'var(--text-dim)', minWidth: '40px',
                             paddingRight: '16px', userSelect: 'none'
                           }}
                         >
@@ -522,17 +522,17 @@ export default function Explorer() {
                                     onClick={() => jumpToLine(cls.start_line)}
                                     style={{
                                       padding: '10px 14px',
-                                      background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(168,85,247,0.08))',
+                                      background: 'linear-gradient(135deg, color-mix(in srgb,var(--primary) 8%,transparent), color-mix(in srgb,var(--accent) 8%,transparent))',
                                       borderBottom: '1px solid var(--border)',
                                       display: 'flex', alignItems: 'center',
                                       gap: '8px', cursor: 'pointer'
                                     }}
-                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.15)'}
-                                    onMouseLeave={e => e.currentTarget.style.background = 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(168,85,247,0.08))'}
+                                    onMouseEnter={e => e.currentTarget.style.background = 'color-mix(in srgb,var(--primary) 15%,transparent)'}
+                                    onMouseLeave={e => e.currentTarget.style.background = 'linear-gradient(135deg, color-mix(in srgb,var(--primary) 8%,transparent), color-mix(in srgb,var(--accent) 8%,transparent))'}
                                   >
                                     <span style={{
                                       padding: '2px 8px', borderRadius: '4px',
-                                      background: 'rgba(99,102,241,0.15)',
+                                      background: 'color-mix(in srgb,var(--primary) 15%,transparent)',
                                       color: 'var(--primary)', fontSize: '10px',
                                       fontWeight: '700', fontFamily: 'monospace'
                                     }}>class</span>
@@ -560,8 +560,8 @@ export default function Explorer() {
                                     >
                                       <span style={{
                                         padding: '1px 6px', borderRadius: '3px',
-                                        background: 'rgba(168,85,247,0.1)',
-                                        color: '#a855f7', fontSize: '9px',
+                                        background: 'color-mix(in srgb,var(--accent) 10%,transparent)',
+                                        color: 'var(--accent)', fontSize: '9px',
                                         fontWeight: '700', fontFamily: 'monospace'
                                       }}>def</span>
                                       <span style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--text)', flex: 1 }}>
@@ -571,7 +571,7 @@ export default function Explorer() {
                                         {method.complexity > 3 && (
                                           <span style={{
                                             fontSize: '10px',
-                                            color: method.complexity > 7 ? '#ef4444' : '#f59e0b',
+                                            color: method.complexity > 7 ? 'var(--danger)' : 'var(--warning)',
                                             fontFamily: 'monospace'
                                           }}>
                                             cx:{method.complexity}
@@ -609,8 +609,8 @@ export default function Explorer() {
                                     >
                                       <span style={{
                                         padding: '1px 6px', borderRadius: '3px',
-                                        background: 'rgba(34,197,94,0.1)',
-                                        color: '#22c55e', fontSize: '9px',
+                                        background: 'color-mix(in srgb,var(--success) 10%,transparent)',
+                                        color: 'var(--success)', fontSize: '9px',
                                         fontWeight: '700', fontFamily: 'monospace'
                                       }}>def</span>
                                       <span style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--text)', flex: 1 }}>
@@ -676,8 +676,8 @@ export default function Explorer() {
                         <div style={{
                           width: `${Math.min(selectedFile.complexity_score * 10, 100)}%`,
                           height: '100%', borderRadius: '3px',
-                          background: selectedFile.complexity_score > 5 ? '#ef4444'
-                            : selectedFile.complexity_score > 2 ? '#f59e0b' : '#22c55e',
+                          background: selectedFile.complexity_score > 5 ? 'var(--danger)'
+                            : selectedFile.complexity_score > 2 ? 'var(--warning)' : 'var(--success)',
                           transition: 'width 0.5s ease'
                         }} />
                       </div>
@@ -715,16 +715,16 @@ export default function Explorer() {
                         }}>
                           <div style={{
                             width: '24px', height: '24px', borderRadius: '6px',
-                            background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                            background: 'var(--brand-gradient)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center'
                           }}>
-                            <Zap size={12} color="white" />
+                            <Zap size={12} color="var(--on-primary)" />
                           </div>
                           <span style={{ fontSize: '12px', fontWeight: '600' }}>AI Summary</span>
                           <span style={{
                             fontSize: '10px', color: 'var(--primary)',
                             background: 'var(--primary-glow)', padding: '2px 8px',
-                            borderRadius: '9999px', border: '1px solid rgba(99,102,241,0.2)'
+                            borderRadius: '9999px', border: '1px solid color-mix(in srgb,var(--primary) 20%,transparent)'
                           }}>
                             {selectedFile.importance_level}
                           </span>

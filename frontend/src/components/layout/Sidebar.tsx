@@ -34,16 +34,16 @@ export default function Sidebar() {
       }}>
         <div style={{
           width: '28px', height: '28px',
-          background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+          background: 'var(--brand-gradient)',
           borderRadius: '8px', display: 'flex',
           alignItems: 'center', justifyContent: 'center',
         }}>
-          <Zap size={14} color="white" />
+          <Zap size={14} color="var(--on-primary)" />
         </div>
         <div>
           <div style={{
             fontSize: '13px', fontWeight: '700',
-            background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+            background: 'linear-gradient(135deg, var(--primary), var(--accent))',
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
           }}>
             CodeLens

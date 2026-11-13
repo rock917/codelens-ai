@@ -4,9 +4,12 @@ import { ChevronsUpDown, UserRound, Settings, LockKeyhole, Moon, LogOut } from '
 import { useAuth } from '../../auth/AuthProvider'
 import { supabase } from '../../auth/client'
 import { AccountDialog, BusyLabel, useToast } from '../ui/AccountFeedback'
+import { useTheme } from '../../theme/ThemeProvider'
+import { themes } from '../../theme/preferences'
 
 export default function ProfileMenu() {
   const { session } = useAuth()
+  const { theme } = useTheme()
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -49,7 +52,7 @@ export default function ProfileMenu() {
       <Link ref={first} to="/settings#account" onClick={() => setOpen(false)}><UserRound size={16} />My Account</Link>
       <Link to="/settings" aria-current={location.pathname === '/settings' ? 'page' : undefined} onClick={() => setOpen(false)}><Settings size={16} />Settings</Link>
       <Link to="/reset-password" onClick={() => setOpen(false)}><LockKeyhole size={16} />Change Password</Link>
-      <button onClick={() => { notify('Dark appearance is active.'); setOpen(false); toggle.current?.focus() }}><Moon size={16} />Appearance<span className="profile-theme">Dark</span></button>
+      <Link to="/settings#appearance" onClick={() => setOpen(false)}><Moon size={16} />Appearance<span className="profile-theme">{themes.find(option => option.id === theme)?.short}</span></Link>
       <button className="profile-signout" onClick={() => { setOpen(false); setError(''); setConfirm(true) }}><LogOut size={16} />Sign Out</button>
     </nav>}
     <AccountDialog open={confirm} onOpenChange={setConfirm} busy={busy} returnFocus={() => toggle.current?.focus()} title="Sign out of CodeLens_AI?"

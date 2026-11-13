@@ -288,12 +288,12 @@ export default function TestGen() {
                   }}>
                     <div style={{
                       width: '48px', height: '48px', borderRadius: '12px',
-                      background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                      background: 'var(--brand-gradient)',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      boxShadow: '0 0 20px rgba(99,102,241,0.3)',
+                      boxShadow: '0 0 20px color-mix(in srgb,var(--primary) 30%,transparent)',
                       animation: 'pulse-glow 2s infinite'
                     }}>
-                      <Zap size={20} color="white" />
+                      <Zap size={20} color="var(--on-primary)" />
                     </div>
                     <div style={{ textAlign: 'center' }}>
                       <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '4px' }}>
@@ -408,8 +408,8 @@ export default function TestGen() {
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes pulse-glow {
-          0%, 100% { box-shadow: 0 0 10px rgba(99,102,241,0.3); }
-          50% { box-shadow: 0 0 25px rgba(99,102,241,0.6); }
+          0%, 100% { box-shadow: 0 0 10px color-mix(in srgb,var(--primary) 30%,transparent); }
+          50% { box-shadow: 0 0 25px color-mix(in srgb,var(--primary) 60%,transparent); }
         }
       `}</style>
     </div>

@@ -14,10 +14,10 @@ import type { Repository, AnalysisIssue, AnalysisSummary } from '../types'
 
 function SeverityBadge({ severity }: { severity: string }) {
   const config: Record<string, { color: string, bg: string, border: string, icon: any }> = {
-    CRITICAL: { color: '#ef4444', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.3)', icon: XCircle },
-    HIGH:     { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.3)', icon: AlertTriangle },
-    MEDIUM:   { color: '#6366f1', bg: 'rgba(99,102,241,0.12)', border: 'rgba(99,102,241,0.3)', icon: Info },
-    LOW:      { color: '#64748b', bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.3)', icon: Info },
+    CRITICAL: { color: 'var(--danger)', bg: 'color-mix(in srgb,var(--danger) 12%,transparent)', border: 'color-mix(in srgb,var(--danger) 30%,transparent)', icon: XCircle },
+    HIGH:     { color: 'var(--warning)', bg: 'color-mix(in srgb,var(--warning) 12%,transparent)', border: 'color-mix(in srgb,var(--warning) 30%,transparent)', icon: AlertTriangle },
+    MEDIUM:   { color: 'var(--primary)', bg: 'color-mix(in srgb,var(--primary) 12%,transparent)', border: 'color-mix(in srgb,var(--primary) 30%,transparent)', icon: Info },
+    LOW:      { color: 'var(--text-muted)', bg: 'color-mix(in srgb,var(--text-muted) 12%,transparent)', border: 'color-mix(in srgb,var(--text-muted) 30%,transparent)', icon: Info },
   }
   const c = config[severity] || config.LOW
   const Icon = c.icon
@@ -50,7 +50,7 @@ function IssueTypeTag({ type }: { type: string }) {
 
 function HealthRing({ score }: { score: number | null }) {
   if (score == null) return <div style={{ width: 100, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>Not scored</div>
-  const color = score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444'
+  const color = score >= 80 ? 'var(--success)' : score >= 50 ? 'var(--warning)' : 'var(--danger)'
   const radius = 40
   const circumference = 2 * Math.PI * radius
   const offset = circumference - (score / 100) * circumference
@@ -88,7 +88,7 @@ function StatBox({ label, value, color }: { label: string, value: number, color:
   return (
     <div style={{
       flex: 1, padding: '16px', borderRadius: '8px',
-      background: `${color}10`, border: `1px solid ${color}25`,
+      background: `color-mix(in srgb, ${color} 6%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 15%, transparent)`,
       textAlign: 'center'
     }}>
       <div style={{
@@ -286,10 +286,10 @@ export default function Analysis() {
                   <div>
                     {summary && (
                       <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
-                        <StatBox label="CRITICAL" value={summary.by_severity.CRITICAL || 0} color="#ef4444" />
-                        <StatBox label="HIGH" value={summary.by_severity.HIGH || 0} color="#f59e0b" />
-                        <StatBox label="MEDIUM" value={summary.by_severity.MEDIUM || 0} color="#6366f1" />
-                        <StatBox label="LOW" value={summary.by_severity.LOW || 0} color="#64748b" />
+                        <StatBox label="CRITICAL" value={summary.by_severity.CRITICAL || 0} color="var(--danger)" />
+                        <StatBox label="HIGH" value={summary.by_severity.HIGH || 0} color="var(--warning)" />
+                        <StatBox label="MEDIUM" value={summary.by_severity.MEDIUM || 0} color="var(--primary)" />
+                        <StatBox label="LOW" value={summary.by_severity.LOW || 0} color="var(--text-muted)" />
                       </div>
                     )}
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -314,7 +314,7 @@ export default function Analysis() {
                 </button>
               </div>
 
-              {error && <div role="alert" style={{ padding: '12px 24px', color: '#fca5a5' }}>{error} <button className="btn-secondary" onClick={() => setRefresh(v => v + 1)}>Refresh results</button></div>}
+              {error && <div role="alert" style={{ padding: '12px 24px', color: 'var(--danger)' }}>{error} <button className="btn-secondary" onClick={() => setRefresh(v => v + 1)}>Refresh results</button></div>}
               {summary && <div role="status" style={{ padding: '12px 24px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7 }}>
                 {running ? 'Analysis is running. Displayed findings are from the last completed scan.' :
                   summary.analysis_status === 'NOT_RUN' ? 'Not analyzed yet. Run a scan to calculate health.' :
@@ -427,9 +427,9 @@ export default function Analysis() {
                         <div style={{
                           width: '3px', height: '40px', borderRadius: '2px',
                           flexShrink: 0,
-                          background: issue.severity === 'CRITICAL' ? '#ef4444'
-                            : issue.severity === 'HIGH' ? '#f59e0b'
-                            : issue.severity === 'MEDIUM' ? '#6366f1' : '#64748b'
+                          background: issue.severity === 'CRITICAL' ? 'var(--danger)'
+                            : issue.severity === 'HIGH' ? 'var(--warning)'
+                            : issue.severity === 'MEDIUM' ? 'var(--primary)' : 'var(--text-muted)'
                         }} />
 
                         <div style={{ flex: 1, minWidth: 0 }}>

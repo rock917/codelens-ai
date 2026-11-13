@@ -39,10 +39,10 @@ function StepIndicator({ step, currentStatus }: {
   const isActive = stepIdx === currentIdx && currentStatus !== 'READY'
   const isFailed = currentStatus === 'FAILED'
 
-  const color = isFailed && isActive ? '#ef4444'
-    : isDone ? '#22c55e'
-    : isActive ? '#6366f1'
-    : '#334155'
+  const color = isFailed && isActive ? 'var(--danger)'
+    : isDone ? 'var(--success)'
+    : isActive ? 'var(--primary)'
+    : 'var(--text-dim)'
 
   return (
     <div style={{
@@ -51,22 +51,22 @@ function StepIndicator({ step, currentStatus }: {
       <div style={{
         width: '20px', height: '20px', borderRadius: '50%',
         border: `2px solid ${color}`,
-        background: isDone ? '#22c55e' : 'transparent',
+        background: isDone ? 'var(--success)' : 'transparent',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         flexShrink: 0, transition: 'all 0.3s'
       }}>
-        {isDone && <CheckCircle size={12} color="white" />}
+        {isDone && <CheckCircle size={12} color="var(--bg-base)" />}
         {isActive && !isFailed && (
           <div style={{
             width: '8px', height: '8px', borderRadius: '50%',
-            background: '#6366f1',
+            background: 'var(--primary)',
             animation: 'pulse 1.5s infinite'
           }} />
         )}
       </div>
       <span style={{
         fontSize: '11px', fontWeight: isActive ? '600' : '400',
-        color: isDone ? '#22c55e' : isActive ? '#6366f1' : '#334155'
+        color: isDone ? 'var(--success)' : isActive ? 'var(--primary)' : 'var(--text-dim)'
       }}>
         {step.charAt(0) + step.slice(1).toLowerCase()}
       </span>
@@ -172,16 +172,16 @@ export default function ProgressTracker({ repoId, repoName, onReady }: Props) {
           <div style={{
             width: '28px', height: '28px', borderRadius: '7px',
             background: isReady
-              ? 'rgba(34,197,94,0.15)'
+              ? 'color-mix(in srgb,var(--success) 15%,transparent)'
               : isFailed
-              ? 'rgba(239,68,68,0.15)'
+              ? 'color-mix(in srgb,var(--danger) 15%,transparent)'
               : 'var(--primary-glow)',
             display: 'flex', alignItems: 'center', justifyContent: 'center'
           }}>
             {isReady
-              ? <CheckCircle size={14} color="#22c55e" />
+              ? <CheckCircle size={14} color="var(--success)" />
               : isFailed
-              ? <XCircle size={14} color="#ef4444" />
+              ? <XCircle size={14} color="var(--danger)" />
               : <Zap size={14} color="var(--primary)"
                   style={{ animation: 'pulse-glow 2s infinite' }} />
             }
@@ -199,15 +199,15 @@ export default function ProgressTracker({ repoId, repoName, onReady }: Props) {
         <span style={{
           fontSize: '11px', padding: '3px 10px', borderRadius: '9999px',
           fontWeight: '600',
-          background: isReady ? 'rgba(34,197,94,0.15)'
-            : isFailed ? 'rgba(239,68,68,0.15)'
+          background: isReady ? 'color-mix(in srgb,var(--success) 15%,transparent)'
+            : isFailed ? 'color-mix(in srgb,var(--danger) 15%,transparent)'
             : 'var(--primary-glow)',
-          color: isReady ? '#22c55e'
-            : isFailed ? '#ef4444'
+          color: isReady ? 'var(--success)'
+            : isFailed ? 'var(--danger)'
             : 'var(--primary)',
-          border: `1px solid ${isReady ? 'rgba(34,197,94,0.3)'
-            : isFailed ? 'rgba(239,68,68,0.3)'
-            : 'rgba(99,102,241,0.3)'}`
+          border: `1px solid ${isReady ? 'color-mix(in srgb,var(--success) 30%,transparent)'
+            : isFailed ? 'color-mix(in srgb,var(--danger) 30%,transparent)'
+            : 'color-mix(in srgb,var(--primary) 30%,transparent)'}`
         }}>
           {progress.status}
         </span>
@@ -223,7 +223,7 @@ export default function ProgressTracker({ repoId, repoName, onReady }: Props) {
             <div style={{
               height: '100%',
               width: progress.total_files > 0 ? `${progressPct}%` : '100%',
-              background: 'linear-gradient(90deg, #6366f1, #a855f7)',
+              background: 'linear-gradient(90deg, var(--primary), var(--accent))',
               borderRadius: '2px',
               animation: progress.total_files === 0 ? 'shimmer 1.5s infinite' : 'none',
               backgroundSize: '200% 100%',
@@ -293,7 +293,7 @@ export default function ProgressTracker({ repoId, repoName, onReady }: Props) {
             }}>
               <div style={{
                 width: '5px', height: '5px', borderRadius: '50%',
-                background: '#22c55e'
+                background: 'var(--success)'
               }} />
               <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
                 live

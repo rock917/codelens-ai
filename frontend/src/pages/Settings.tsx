@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { supabase } from '../auth/client'
 import { getDeletionStatus, deleteAccount } from '../services/api'
 import TopBar from '../components/layout/TopBar'
+import Appearance from '../theme/Appearance'
 import './settings.css'
 import { AccountDialog, BusyLabel, useToast } from '../components/ui/AccountFeedback'
 
@@ -75,7 +76,8 @@ export default function Settings() {
         <h2 id="account-heading">Your account</h2>
         <p style={{ overflowWrap: 'anywhere', marginTop: 12 }}>{session?.user.email}</p>
       </section>
-      <section className="card" style={{ padding: 24, marginTop: 24, borderColor: 'var(--danger, #b94d64)' }} aria-labelledby="delete-heading">
+      <Appearance />
+      <section className="card" style={{ padding: 24, marginTop: 24, borderColor: 'var(--danger)' }} aria-labelledby="delete-heading">
         <h2 id="delete-heading">Danger Zone</h2>
         <p style={{ marginTop: 16, lineHeight: 1.7 }}>Permanently remove your CodeLens login, saved repositories, source files, vector indexes, chats, analysis results and usage history. This cannot be undone.</p>
         <p style={{ marginTop: 12, lineHeight: 1.7 }}>Your GitHub repositories, Google and GitHub accounts, and other users’ data are unaffected. Existing backups can retain data until rotated or manually removed. If you register again, you start with a fresh analysis allowance.</p>
