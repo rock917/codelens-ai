@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   FileCode, ChevronRight,
   ChevronDown, Folder, FolderOpen,
@@ -161,6 +161,10 @@ export default function Explorer() {
   const [selectedFile, setSelectedFile] = useState<FileRecord | null>(null)
   const [symbols, setSymbols] = useState<Symbol[]>([])
   const [summary, setSummary] = useState<string>('')
+  const [summaryStatus, setSummaryStatus] = useState('')
+  const [refreshingSummary, setRefreshingSummary] = useState(false)
+  const selection = useRef(0)
+  const refreshInFlight = useRef(false)
   const [fileContent, setFileContent] = useState<string>('')
   const [loadingFile, setLoadingFile] = useState(false)
   const [activeTab, setActiveTab] = useState<'code' | 'symbols' | 'info' | 'summary'>('code')
@@ -178,6 +182,8 @@ export default function Explorer() {
   }
 
   async function selectRepo(repo: Repository) {
+    selection.current += 1
+    setSummaryStatus('')
     setSelectedRepo(repo)
     setSelectedFile(null)
     setSymbols([])
@@ -191,6 +197,8 @@ export default function Explorer() {
   }
 
   async function selectFile(file: FileRecord) {
+    const request = ++selection.current
+    setSummaryStatus('')
     setSelectedFile(file)
     setLoadingFile(true)
     setFileContent('')
@@ -205,13 +213,34 @@ export default function Explorer() {
         getFileSummary(file.id),
         getFileContent(selectedRepo!.id, file.id)
       ])
+      if (request !== selection.current) return
+      setSummaryStatus(sumRes.data?.cached ? 'Using saved results' : 'Summary generated')
       setSymbols(symRes.data)
       setSummary(sumRes.data?.summary || '')
       setFileContent(contentRes.data?.content || '')
     } catch (err) {
       console.error(err)
     } finally {
-      setLoadingFile(false)
+      if (request === selection.current) setLoadingFile(false)
+    }
+  }
+
+  async function refreshSummary() {
+    if (!selectedFile || refreshInFlight.current) return
+    refreshInFlight.current = true
+    const request = selection.current
+    setRefreshingSummary(true)
+    setSummaryStatus('Refreshing summary…')
+    try {
+      const { data } = await getFileSummary(selectedFile.id, true)
+      if (request !== selection.current) return
+      setSummary(data.summary || '')
+      setSummaryStatus(data.cached ? 'Using saved results' : 'Summary refreshed')
+    } catch {
+      if (request === selection.current) setSummaryStatus('Could not refresh. Your previous summary is still available; try again.')
+    } finally {
+      refreshInFlight.current = false
+      setRefreshingSummary(false)
     }
   }
 
@@ -695,6 +724,10 @@ export default function Explorer() {
                 {/* SUMMARY TAB */}
                 {activeTab === 'summary' && (
                   <div className="animate-fade-in" style={{ padding: '16px 20px' }}>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+                      <span role="status" style={{ color: 'var(--text-muted)', fontSize: 12 }}>{summaryStatus}</span>
+                      <button className="btn-secondary" disabled={refreshingSummary || loadingFile} onClick={() => void refreshSummary()}>{refreshingSummary ? 'Refreshing…' : 'Refresh summary'}</button>
+                    </div>
                     {!summary ? (
                       <div style={{
                         textAlign: 'center', padding: '40px', color: 'var(--text-muted)'

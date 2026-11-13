@@ -142,8 +142,8 @@ export const deleteConversation = (conversationId: string) =>
   api.delete(`/chat/conversations/${conversationId}`)
 
 // ── Analysis ─────────────────────────────────────────────────
-export const triggerAnalysis = (repoId: string) =>
-  api.post(`/analysis/${repoId}`)
+export const triggerAnalysis = (repoId: string, force = false) =>
+  api.post(`/analysis/${repoId}`, null, { params: { force } })
 
 export const getIssues = (repoId: string, severity?: string) =>
   api.get(`/analysis/${repoId}/issues`, { params: { severity } })
@@ -152,8 +152,8 @@ export const getAnalysisSummary = (repoId: string) =>
   api.get(`/analysis/${repoId}/summary`)
 
 // ── Summary ──────────────────────────────────────────────────
-export const getFileSummary = (fileId: string) =>
-  api.get(`/summary/file/${fileId}`)
+export const getFileSummary = (fileId: string, force = false) =>
+  api.get(`/summary/file/${fileId}`, { params: { force } })
 
 export const getRepositorySummary = (repoId: string) =>
   api.get(`/summary/repository/${repoId}`)

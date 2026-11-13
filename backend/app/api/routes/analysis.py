@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database.base import get_db
 from app.models.repository import Repository, AnalysisIssue, File, RepositoryJob
-from app.services.analyzer.analysis_engine import run_analysis_job, calculate_health_score
+from app.services.analyzer.analysis_engine import run_analysis_job, calculate_health_score, analysis_key
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
@@ -16,32 +17,48 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 async def trigger_analysis(
     repo_id: str,
     background_tasks: BackgroundTasks,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    await owned_repository(db, repo_id, user.id)
-    result = await db.execute(
-        select(Repository).where(Repository.id == repo_id).with_for_update()
-    )
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(404, "Repository not found")
-    if repo.status != "READY":
-        raise HTTPException(400, f"Repository not ready. Status: {repo.status}")
+    from app.services.result_cache import repository_lock
+    async with repository_lock(repo_id):
+        await owned_repository(db, repo_id, user.id)
+        result = await db.execute(
+            select(Repository).where(Repository.id == repo_id).with_for_update()
+        )
+        repo = result.scalar_one_or_none()
+        if not repo:
+            raise HTTPException(404, "Repository not found")
+        if repo.status != "READY":
+            raise HTTPException(400, f"Repository not ready. Status: {repo.status}")
 
-    active = await db.scalar(select(RepositoryJob.id).where(
-        RepositoryJob.repository_id == repo_id, RepositoryJob.job_type == 'ANALYSIS',
-        RepositoryJob.status.in_(['PENDING', 'RUNNING']),
-    ).limit(1))
-    if active:
-        return {"message": "Analysis already running", "repository_id": repo_id, "job_id": active}
-    job = RepositoryJob(id=str(uuid.uuid4()), repository_id=repo_id,
-                        job_type='ANALYSIS', status='RUNNING',
-                        created_at=datetime.now(timezone.utc).replace(tzinfo=None))
-    db.add(job)
-    await db.commit()
-    background_tasks.add_task(run_analysis_job, repo_id, job.id)
-    return {"message": "Analysis started", "repository_id": repo_id, "job_id": job.id}
+        active = await db.scalar(select(RepositoryJob.id).where(
+            RepositoryJob.repository_id == repo_id, RepositoryJob.job_type == 'ANALYSIS',
+            RepositoryJob.status.in_(['PENDING', 'RUNNING']),
+        ).limit(1))
+        if active:
+            return {"message": "Analysis already running", "repository_id": repo_id, "job_id": active}
+        if not force:
+            completed = await db.scalar(select(RepositoryJob).where(
+                RepositoryJob.repository_id == repo_id, RepositoryJob.job_type == 'ANALYSIS',
+            ).order_by(RepositoryJob.created_at.desc(), RepositoryJob.id.desc()).limit(1))
+            if completed and completed.status == 'COMPLETED':
+                rows = (await db.execute(select(File.id, File.path, File.language).where(File.repository_id == repo_id))).all()
+                try:
+                    key = await asyncio.to_thread(analysis_key, repo_id, rows)
+                    saved = json.loads(completed.message or '{}')
+                except (ValueError, OSError):
+                    saved, key = {}, None
+                if key and isinstance(saved, dict) and saved.get('cache_key') == key:
+                    return {"message": "Using saved results", "repository_id": repo_id, "job_id": completed.id, "cached": True}
+        job = RepositoryJob(id=str(uuid.uuid4()), repository_id=repo_id,
+                            job_type='ANALYSIS', status='RUNNING',
+                            created_at=datetime.now(timezone.utc).replace(tzinfo=None))
+        db.add(job)
+        await db.commit()
+        background_tasks.add_task(run_analysis_job, repo_id, job.id)
+        return {"cached": False, "message": "Analysis started", "repository_id": repo_id, "job_id": job.id}
 
 @router.get("/{repo_id}/issues")
 async def get_issues(

@@ -3,7 +3,7 @@ import asyncio
 from sqlalchemy import select
 from app.config.settings import settings
 from app.models.repository import CodeChunk
-from app.services.embedding_service import embedding_service
+from app.services.cached_processing import embed as cached_embed
 from app.services.vector_store import vector_store
 
 
@@ -22,7 +22,7 @@ async def index_repository_vectors(db, repository_id: str) -> int:
             break
         # IDs, text, vectors and metadata come from the SAME ordered batch.
         texts = [f'File: {c.file_path}\nSymbol: {c.symbol_name or ""} ({c.symbol_type or ""})\n\n{c.content}' for c in chunks]
-        embeddings = await asyncio.to_thread(embedding_service.embed_batch, texts)
+        embeddings = await asyncio.to_thread(cached_embed, repository_id, texts)
         await asyncio.to_thread(
             vector_store.add_chunks,
             repository_id=repository_id,

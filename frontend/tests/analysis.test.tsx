@@ -43,3 +43,26 @@ it('ignores a stale response after switching repositories', async () => {
   expect(screen.queryByText('12')).toBeNull()
   expect(screen.getByText('75')).toBeTruthy()
 })
+
+it('shows a real cache hit and offers an explicit fresh scan', async () => {
+  api.getAnalysisSummary.mockResolvedValue(summary('COMPLETED', 80))
+  api.triggerAnalysis.mockResolvedValue({ data: { cached: true } })
+  await act(async () => { render(<Analysis />) })
+  await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'Run Analysis' })[0]) })
+  expect(api.triggerAnalysis).toHaveBeenLastCalledWith('a', false)
+  expect(screen.getByText('Using saved results. No new scan was needed.')).toBeTruthy()
+  api.triggerAnalysis.mockResolvedValue({ data: { cached: false } })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Run fresh scan' })) })
+  expect(api.triggerAnalysis).toHaveBeenLastCalledWith('a', true)
+  expect(screen.queryByText('Using saved results. No new scan was needed.')).toBeNull()
+})
+it('blocks repeated submissions while the trigger request is pending', async () => {
+  api.getAnalysisSummary.mockResolvedValue(summary('COMPLETED', 80))
+  let finish!: (value: unknown) => void
+  api.triggerAnalysis.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  await act(async () => { render(<Analysis />) })
+  const button = screen.getAllByRole('button', { name: 'Run Analysis' })[0]
+  await act(async () => { fireEvent.click(button); fireEvent.click(button) })
+  expect(api.triggerAnalysis).toHaveBeenCalledTimes(1)
+  await act(async () => { finish({ data: { cached: true } }) })
+})

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Shield, AlertTriangle, XCircle,
   CheckCircle, Info, RefreshCw,
@@ -112,6 +112,9 @@ export default function Analysis() {
   const [loading, setLoading] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
+  const [cacheMessage, setCacheMessage] = useState('')
+  const submitting = useRef(false)
+  const currentRepo = useRef<string | undefined>(undefined)
   const [refresh, setRefresh] = useState(0)
   const [severityFilter, setSeverityFilter] = useState<string>('ALL')
   const [expandedIssue, setExpandedIssue] = useState<string | null>(null)
@@ -128,6 +131,7 @@ export default function Analysis() {
   }, [])
 
   const repoId = selectedRepo?.id
+  currentRepo.current = repoId
   useEffect(() => {
     if (!repoId) return
     let active = true
@@ -151,17 +155,24 @@ export default function Analysis() {
     return () => { active = false; clearTimeout(timer) }
   }, [repoId, refresh])
 
-  function selectRepo(repo: Repository) { setSelectedRepo(repo) }
+  function selectRepo(repo: Repository) { setCacheMessage(''); setSelectedRepo(repo) }
 
-  async function handleRunAnalysis() {
-    if (!selectedRepo || running) return
-    setRunning(true); setError('')
+  async function handleRunAnalysis(force = false) {
+    if (!selectedRepo || running || submitting.current) return
+    const id = selectedRepo.id
+    submitting.current = true
+    setRunning(true); setError(''); setCacheMessage('')
     try {
-      await triggerAnalysis(selectedRepo.id)
+      const { data } = await triggerAnalysis(id, force)
+      if (currentRepo.current !== id) return
+      setCacheMessage(data.cached ? 'Using saved results. No new scan was needed.' : '')
       setRefresh(value => value + 1)
     } catch {
+      if (currentRepo.current !== id) return
       setError('Unable to start analysis. Refresh the results and try again.')
       setRunning(false)
+    } finally {
+      submitting.current = false
     }
   }
 
@@ -303,7 +314,7 @@ export default function Analysis() {
 
                 <button
                   className="btn-primary"
-                  onClick={handleRunAnalysis}
+                  onClick={() => void handleRunAnalysis()}
                   disabled={running || loading}
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
@@ -314,10 +325,15 @@ export default function Analysis() {
                 </button>
               </div>
 
+              {summary?.coverage && <div style={{ padding: '8px 24px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span role="status" style={{ color: 'var(--text-muted)', fontSize: 12 }}>{cacheMessage || 'Unchanged inputs reuse saved results.'}</span>
+                <button className="btn-secondary" disabled={running || loading} onClick={() => void handleRunAnalysis(true)}>Run fresh scan</button>
+              </div>}
               {error && <div role="alert" style={{ padding: '12px 24px', color: 'var(--danger)' }}>{error} <button className="btn-secondary" onClick={() => setRefresh(v => v + 1)}>Refresh results</button></div>}
               {summary && <div role="status" style={{ padding: '12px 24px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7 }}>
                 {running ? 'Analysis is running. Displayed findings are from the last completed scan.' :
                   summary.analysis_status === 'NOT_RUN' ? 'Not analyzed yet. Run a scan to calculate health.' :
+                  summary.analysis_status === 'STALE' ? 'The source index changed. Run analysis to calculate current results.' :
                   summary.analysis_status === 'LEGACY' ? 'These findings are from an earlier scan. Run analysis again to calculate the updated score and coverage.' :
                   summary.coverage ? `${summary.coverage.scanned_files} files scanned · ${summary.coverage.scanned_loc.toLocaleString()} lines · ${summary.coverage.unsupported_files} unsupported files excluded.` : 'No completed scan available.'}
                 {summary.coverage?.scanned_files === 0 && <div>No supported source files. Scanning supports Python, JavaScript and TypeScript.</div>}
@@ -394,7 +410,7 @@ export default function Analysis() {
                     {issues.length === 0 && (
                       <button className="btn-primary"
                         style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}
-                        disabled={running || loading} onClick={handleRunAnalysis}>
+                        disabled={running || loading} onClick={() => void handleRunAnalysis()}>
                         <Zap size={13} /> Run Analysis
                       </button>
                     )}

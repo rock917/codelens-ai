@@ -35,10 +35,8 @@ def calculate_health_score(counts: dict, scanned_loc: int) -> int:
     return score
 
 
-def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
+def source_snapshot(repo_id, files):
     root = (Path(settings.UPLOAD_DIR) / repo_id).resolve()
-    findings = []
-    scanned_files = scanned_loc = 0
     for file_id, path, language in files:
         if language not in SUPPORTED_LANGUAGES:
             continue
@@ -49,8 +47,33 @@ def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
         candidate = next((p.resolve() for p in candidates
                           if p.resolve().is_relative_to(root) and p.is_file()), None)
         if candidate is None:
-            raise ValueError("Source files are missing. Import this repository again before scanning.")
-        content = candidate.read_text(encoding='utf-8', errors='replace')
+            raise ValueError('Source files are missing. Import this repository again before scanning.')
+        yield file_id, path, language, candidate.read_text(encoding='utf-8', errors='replace')
+
+
+def source_key(file_id, path, language, content):
+    from app.services.result_cache import fingerprint
+    return file_id, path, language, fingerprint(content)
+
+
+def snapshot_key(sources, files):
+    from app.services import result_cache as cache
+    version = cache.code_version('analyzer/analysis_engine.py', 'analyzer/complexity_analyzer.py',
+                                 'analyzer/security_analyzer.py', 'analyzer/smell_analyzer.py')
+    return cache.fingerprint(version, sorted(sources), sorted([tuple(f) for f in files]))
+
+
+def analysis_key(repo_id, files):
+    return snapshot_key([source_key(*source) for source in source_snapshot(repo_id, files)], files)
+
+
+def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
+    sources = source_snapshot(repo_id, files)
+    source_keys = []
+    findings = []
+    scanned_files = scanned_loc = 0
+    for file_id, path, language, content in sources:
+        source_keys.append(source_key(file_id, path, language, content))
         scanned_files += 1
         scanned_loc += len(content.splitlines())
         for analyzer in (analyze_complexity, analyze_security, analyze_smells):
@@ -61,7 +84,8 @@ def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
                     message=issue.message, line=issue.line, suggestion=issue.suggestion,
                 ))
     return findings, {"scanned_files": scanned_files, "scanned_loc": scanned_loc,
-                      "unsupported_files": len(files) - scanned_files}
+                      "unsupported_files": len(files) - scanned_files,
+                      "cache_key": snapshot_key(source_keys, files)}
 
 
 async def run_analysis(db: AsyncSession, repo_id: str, job: RepositoryJob) -> dict:

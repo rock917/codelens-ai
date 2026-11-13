@@ -1,19 +1,20 @@
+import asyncio
 import os
 import hashlib
 import json
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from app.models.repository import (
-    File, Symbol, CodeChunk, Repository
+    File, Symbol, CodeChunk, Repository, AnalysisIssue, RepositoryJob
 )
 from app.services.file_filter import (
     should_process_file, detect_language,
     is_binary_file, get_file_size, MAX_FILE_SIZE
 )
-from app.services.parser.parser_factory import ParserFactory
+from app.services.cached_processing import parse as cached_parse, embed as cached_embed, pipeline_version
+from app.services import result_cache
 from app.services.importance_scorer import calculate_importance_score
 from app.services.chunker import chunk_parsed_file
-from app.services.embedding_service import embedding_service
 from app.services.vector_store import vector_store
 from app.config.settings import settings
 from pathlib import Path
@@ -23,7 +24,7 @@ def generate_id() -> str:
     return str(uuid.uuid4())
 
 def hash_file(file_path: str) -> str:
-    hasher = hashlib.md5()
+    hasher = hashlib.sha256()
     try:
         with open(file_path, 'rb') as f:
             while chunk := f.read(8192):
@@ -70,6 +71,16 @@ async def incremental_index(
     }
 
     current_paths = set()
+    version_changed = result_cache.read(repo_id, "index-version") != pipeline_version()
+    if version_changed:
+        # Embedding dimensions may change with the model. Recreate only this
+        # repository's derived collection; source files and chats are retained.
+        from chromadb.errors import NotFoundError
+        try:
+            await asyncio.to_thread(vector_store.get_client().delete_collection,
+                                    'repo_' + repo_id.replace('-', '_'))
+        except NotFoundError:
+            pass
 
     for root, dirs, files in os.walk(directory):
         dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
@@ -97,7 +108,7 @@ async def incremental_index(
             # Check if file exists and hash matches
             if relative_path in existing_files:
                 existing = existing_files[relative_path]
-                if existing.hash == new_hash:
+                if existing.hash == new_hash and not version_changed:
                     stats["unchanged"] += 1
                     continue
 
@@ -123,10 +134,33 @@ async def incremental_index(
     for path, file in existing_files.items():
         if path not in current_paths:
             print(f"  🗑️ Deleted: {path}")
+            chunks = (await db.scalars(select(CodeChunk).where(CodeChunk.file_id == file.id))).all()
+            ids = [c.chroma_id for c in chunks if c.chroma_id]
+            if ids:
+                await asyncio.to_thread(vector_store.get_collection(repo_id).delete, ids=ids)
             await db.delete(file)
             stats["deleted"] += 1
 
+    await db.flush()
+    if stats['updated'] or stats['added'] or stats['deleted']:
+        await db.execute(delete(AnalysisIssue).where(AnalysisIssue.repository_id == repo_id))
+        await db.execute(update(RepositoryJob).where(RepositoryJob.repository_id == repo_id,
+            RepositoryJob.job_type == 'ANALYSIS', RepositoryJob.status == 'COMPLETED')
+            .values(status='STALE', message=None))
+    files = (await db.scalars(select(File).where(File.repository_id == repo_id))).all()
+    repo = await db.get(Repository, repo_id)
+    if repo:
+        from sqlalchemy import func
+        repo.total_files = repo.processed_files = len(files)
+        repo.total_loc = sum(f.loc or 0 for f in files)
+        repo.total_chunks = await db.scalar(select(func.count()).select_from(CodeChunk).where(CodeChunk.repository_id == repo_id))
+        languages = {}
+        for file in files:
+            if file.language not in ('unknown', 'markdown', 'json', 'yaml', 'toml'):
+                languages[file.language] = languages.get(file.language, 0) + 1
+        repo.languages = json.dumps(languages)
     await db.commit()
+    await asyncio.to_thread(result_cache.write, repo_id, "index-version", pipeline_version())
 
     print(f"✅ Incremental index complete: {stats}")
     return stats
@@ -160,13 +194,10 @@ async def _reprocess_file(
         )
         old_chunks = result2.scalars().all()
         if old_chunks:
-            try:
-                collection = vector_store.get_collection(repo_id)
-                old_ids = [c.chroma_id for c in old_chunks if c.chroma_id]
-                if old_ids:
-                    collection.delete(ids=old_ids)
-            except Exception:
-                pass
+            collection = vector_store.get_collection(repo_id)
+            old_ids = [c.chroma_id for c in old_chunks if c.chroma_id]
+            if old_ids:
+                await asyncio.to_thread(collection.delete, ids=old_ids)
         await db.delete(existing)
         await db.flush()
 
@@ -180,9 +211,7 @@ async def _reprocess_file(
     imports_json = "[]"
 
     if language in ("python", "javascript", "typescript"):
-        parsed = ParserFactory.parse_file(
-            relative_path, content, language
-        )
+        parsed = await asyncio.to_thread(cached_parse, repo_id, relative_path, content, language)
 
         if parsed and not parsed.error:
             importance_score, importance_level = calculate_importance_score(
@@ -223,10 +252,10 @@ async def _reprocess_file(
             if chunks:
                 texts = [
                     f"File: {c.file_path}\n"
-                    f"Symbol: {c.symbol_name or ''}\n\n{c.content}"
+                    f"Symbol: {c.symbol_name or ''} ({c.symbol_type or ''})\n\n{c.content}"
                     for c in chunks
                 ]
-                embeddings = embedding_service.embed_batch(texts)
+                embeddings = await asyncio.to_thread(cached_embed, repo_id, texts)
                 chunk_ids = [generate_id() for _ in chunks]
                 documents = [c.content for c in chunks]
                 metadatas = [{
@@ -239,7 +268,7 @@ async def _reprocess_file(
                     "end_line": c.end_line
                 } for c in chunks]
 
-                vector_store.add_chunks(
+                await asyncio.to_thread(vector_store.add_chunks,
                     repository_id=repo_id,
                     chunk_ids=chunk_ids,
                     embeddings=embeddings,

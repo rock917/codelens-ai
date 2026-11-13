@@ -118,6 +118,128 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()['id']
 
+    async def test_summary_cache_reuse_refresh_isolation_and_model_invalidation(self):
+        from app.services import result_cache
+        repo = await self.upload()
+        files = (await self.client.get(f'/repositories/{repo}/files')).json()
+        file_id = files[0]['id']
+        for path in (f'/summary/file/{file_id}', f'/summary/repository/{repo}'):
+            first = await self.client.get(path)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertFalse(first.json()['cached'])
+            count = groq_provider.chat.await_count
+            self.assertTrue((await self.client.get(path)).json()['cached'])
+            self.assertEqual(groq_provider.chat.await_count, count)
+            refreshed = await self.client.get(path + '?force=true')
+            self.assertFalse(refreshed.json()['cached'])
+            self.assertEqual(groq_provider.chat.await_count, count + 1)
+            with patch.object(groq_provider, 'model', 'different-test-model'):
+                self.assertFalse((await self.client.get(path)).json()['cached'])
+            self.client.headers['Authorization'] = 'Bearer user-b'
+            before = groq_provider.chat.await_count
+            self.assertEqual((await self.client.get(path)).status_code, 404)
+            self.assertEqual(groq_provider.chat.await_count, before)
+            self.client.headers['Authorization'] = 'Bearer user-a'
+        self.assertTrue(result_cache.directory(repo).is_dir())
+        self.assertEqual((await self.client.delete(f'/repositories/{repo}')).status_code, 200)
+        self.assertFalse(result_cache.directory(repo).exists())
+
+    async def test_summary_duplicate_requests_share_work_and_failures_are_not_cached(self):
+        repo = await self.upload()
+        path = f'/summary/repository/{repo}'
+        started, release = asyncio.Event(), asyncio.Event()
+        async def slow(*args, **kwargs):
+            started.set()
+            await release.wait()
+            return 'Shared summary'
+        with patch.object(groq_provider, 'chat', new=AsyncMock(side_effect=slow)) as model:
+            first = asyncio.create_task(self.client.get(path))
+            await started.wait()
+            second = asyncio.create_task(self.client.get(path))
+            await asyncio.sleep(.05)
+            release.set()
+            results = await asyncio.gather(first, second)
+            self.assertEqual(sorted(r.json()['cached'] for r in results), [False, True])
+            self.assertEqual(model.await_count, 1)
+        from app.services import result_cache
+        result_cache.erase(repo)
+        with patch.object(groq_provider, 'chat', new=AsyncMock(side_effect=RuntimeError('provider unavailable'))):
+            with self.assertRaises(RuntimeError):
+                await self.client.get(path)
+        self.assertFalse((await self.client.get(path)).json()['cached'])
+
+    async def test_health_cache_source_rules_and_force_refresh(self):
+        from app.services.analyzer import analysis_engine
+        repo = await self.upload()
+        path = f'/analysis/{repo}'
+        first = (await self.client.post(path)).json()
+        second = (await self.client.post(path)).json()
+        self.assertTrue(second['cached'])
+        self.assertEqual(first['job_id'], second['job_id'])
+        forced = (await self.client.post(path + '?force=true')).json()
+        self.assertFalse(forced['cached'])
+        self.assertNotEqual(first['job_id'], forced['job_id'])
+        source = Path(settings.UPLOAD_DIR, repo, 'sample.py')
+        source.write_text(SOURCE + '\n# changed source\n')
+        self.assertFalse((await self.client.post(path)).json()['cached'])
+        with patch('app.services.result_cache.code_version', return_value='new-rules'):
+            self.assertFalse((await self.client.post(path)).json()['cached'])
+        used = (await self.client.get('/repositories/usage')).json()['used']
+        self.assertEqual(used, 1)
+
+    async def test_parsing_embedding_cache_and_versioned_reindex(self):
+        from app.services import cached_processing, result_cache
+        from app.services.parser.parser_factory import ParserFactory
+        repo = await self.upload()
+        with patch.object(ParserFactory, 'parse_file', wraps=ParserFactory.parse_file) as parse:
+            cached_processing.parse(repo, 'cached.py', SOURCE, 'python')
+            cached_processing.parse(repo, 'cached.py', SOURCE, 'python')
+            self.assertEqual(parse.call_count, 1)
+            cached_processing.parse(repo, 'cached.py', SOURCE + '\n# changed', 'python')
+            self.assertEqual(parse.call_count, 2)
+        with patch.object(embedding_service, 'embed_batch', side_effect=lambda texts: [[1., 0.] for _ in texts]) as embed:
+            values = cached_processing.embed(repo, ['first', 'first', 'second'])
+            self.assertEqual(len(values), 3)
+            self.assertEqual(embed.call_args.args[0], ['first', 'second'])
+            cached_processing.embed(repo, ['second', 'first'])
+            self.assertEqual(embed.call_count, 1)
+            with patch.object(settings, 'EMBEDDING_MODEL', 'changed-model'):
+                cached_processing.embed(repo, ['first'])
+                self.assertEqual(embed.call_count, 2)
+        with patch.object(cached_processing, 'parse', wraps=cached_processing.parse):
+            before = vector_store.get_chunk_count(repo)
+            self.assertEqual((await self.client.post(f'/repositories/{repo}/reindex')).status_code, 200)
+            self.assertEqual(vector_store.get_chunk_count(repo), before)
+            await self.client.post(f'/analysis/{repo}')
+            result_cache.write(repo, 'index-version', 'old-version')
+            response = await self.client.post(f'/repositories/{repo}/reindex')
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual((await self.client.get(f'/repositories/{repo}/status')).json()['status'], 'READY')
+            self.assertEqual(vector_store.get_chunk_count(repo), before)
+            health = (await self.client.get(f'/analysis/{repo}/summary')).json()
+            self.assertEqual(health['analysis_status'], 'STALE')
+            self.assertIsNone(health['health_score'])
+
+    async def test_cache_corruption_expiry_bounds_and_deleted_account(self):
+        from app.services import result_cache as cache
+        repo = await self.upload()
+        cache.write(repo, 'sample', {'safe': True})
+        path = cache.directory(repo) / (cache.fingerprint('sample') + '.json')
+        path.write_text('broken JSON')
+        self.assertIsNone(cache.read(repo, 'sample'))
+        with patch.object(cache, 'TTL', -1):
+            cache.write(repo, 'expired', 'value')
+        self.assertIsNone(cache.read(repo, 'expired'))
+        with patch.object(cache, 'MAX_ENTRIES', 2):
+            for i in range(5):
+                cache.write(repo, str(i), 'value')
+            self.assertLessEqual(len(list(cache.directory(repo).glob('*.json'))), 2)
+        self.enable_deletion()
+        with patch('app.services.account_deletion.delete_identity', new=AsyncMock()):
+            response = await self.client.request('DELETE', '/account/deletion', json={'email': 'user-a@example.com', 'confirmation': 'DELETE'})
+            self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(cache.directory(repo).exists())
+
     def enable_deletion(self):
         import time
         from pydantic import SecretStr
@@ -495,7 +617,7 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         await self.client.post(path)
         self.assertEqual(len((await self.client.get(path + '/issues')).json()), len(original))
         with patch('app.services.analyzer.analysis_engine._scan_files', side_effect=OSError('Missing file')):
-            await self.client.post(path)
+            await self.client.post(path + '?force=true')
         failed = (await self.client.get(path + '/summary')).json()
         self.assertEqual(failed['analysis_status'], 'FAILED')
         self.assertEqual(failed['health_score'], scanned['health_score'])

@@ -69,6 +69,8 @@ async def delete_identity(owner_id):
 
 
 def erase_storage(repo_id):
+    from app.services.result_cache import erase
+    erase(repo_id)
     from chromadb.errors import NotFoundError
     from app.services.vector_store import vector_store
     if str(UUID(repo_id)) != repo_id:

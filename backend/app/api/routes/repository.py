@@ -1,5 +1,6 @@
 from app.auth import AuthUser, get_current_user, owned_file, owned_repository
 import os
+import asyncio
 from pathlib import Path
 import hashlib
 import uuid
@@ -21,6 +22,8 @@ from app.schemas.repository import (
 from app.services.admission_service import admit, usage, normalize_url, resolve_revision
 from app.workers.ingestion_worker import run_zip_ingestion, run_github_ingestion
 from app.config.settings import settings
+from app.services import result_cache
+from app.services.reindex_service import schedule_reindex
 
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
@@ -56,6 +59,8 @@ async def upload_zip(background_tasks: BackgroundTasks, file: UploadFile = File(
         if not reused:
             background_tasks.add_task(run_zip_ingestion, repo.id, temp_path)
             temp_path = None
+        if reused:
+            await schedule_reindex(db, repo, background_tasks, only_if_stale=True)
         return RepositoryUploadResponse(id=repo.id, name=repo.name, status=repo.status, reused=reused,
             message='Opening your existing repository. No credit used.' if reused else 'Import started. One slot reserved until it succeeds.')
     finally:
@@ -72,6 +77,8 @@ async def ingest_github(request: GithubIngestRequest, background_tasks: Backgrou
                               'github', url, revision, request.confirmed_revision)
     if not reused:
         background_tasks.add_task(run_github_ingestion, repo.id, url, revision)
+    else:
+        await schedule_reindex(db, repo, background_tasks, only_if_stale=True)
     return RepositoryUploadResponse(id=repo.id, name=repo.name, status=repo.status, reused=reused,
         message='Opening your existing repository. No credit used.' if reused else 'Import started. One slot reserved until it succeeds.')
 
@@ -218,26 +225,33 @@ async def delete_repository(
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    await owned_repository(db, repo_id, user.id)
-    result = await db.execute(
-        select(Repository).where(Repository.id == repo_id)
-    )
+    async with result_cache.repository_lock(repo_id):
+        await owned_repository(db, repo_id, user.id)
+        result = await db.execute(
+            select(Repository).where(Repository.id == repo_id)
+        )
 
-    repo = result.scalar_one_or_none()
+        repo = result.scalar_one_or_none()
 
-    if not repo:
-        raise HTTPException(404, "Repository not found")
+        if not repo:
+            raise HTTPException(404, "Repository not found")
 
-    if repo.status not in ('READY', 'FAILED'):
-        raise HTTPException(409, 'Wait for this import to finish before deleting it.')
-    from app.models.summary import RepositorySummary
-    await db.execute(delete(RepositorySummary).where(RepositorySummary.repository_id == repo_id))
-    await db.delete(repo)
-    await db.commit()
+        if repo.status not in ('READY', 'FAILED'):
+            raise HTTPException(409, 'Wait for this import to finish before deleting it.')
+        from app.models.repository import RepositoryJob
+        busy = await db.scalar(select(RepositoryJob.id).where(RepositoryJob.repository_id == repo_id,
+            RepositoryJob.status.in_(['PENDING', 'RUNNING'])).limit(1))
+        if busy:
+            raise HTTPException(409, 'Wait for current analysis to finish before deleting this repository.')
+        from app.models.summary import RepositorySummary
+        await db.execute(delete(RepositorySummary).where(RepositorySummary.repository_id == repo_id))
+        await asyncio.to_thread(result_cache.erase, repo_id)
+        await db.delete(repo)
+        await db.commit()
 
-    return {
-        "message": "Repository deleted successfully"
-    }
+        return {
+            "message": "Repository deleted successfully"
+        }
 
 
 @router.post("/{repo_id}/reindex")
@@ -263,26 +277,7 @@ async def reindex_repository(
             "Repository must be READY to reindex"
         )
 
-    async def run_reindex():
-        from app.services.incremental_indexer import incremental_index
-
-        directory = os.path.join(
-            settings.UPLOAD_DIR,
-            repo_id
-        )
-
-        if os.path.exists(directory):
-            async with __import__(
-                "app.database.base",
-                fromlist=["AsyncSessionLocal"]
-            ).AsyncSessionLocal() as db2:
-                await incremental_index(
-                    db2,
-                    repo_id,
-                    directory
-                )
-
-    background_tasks.add_task(run_reindex)
+    await schedule_reindex(db, repo, background_tasks)
 
     return {
         "message": "Reindexing started",

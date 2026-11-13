@@ -1,21 +1,20 @@
 from app.auth import AuthUser, get_current_user, owned_file, owned_repository
-import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database.base import get_db
 from app.models.repository import File, Repository
 from app.services.summarization_service import (
-    generate_file_summary_lazy,
-    summarize_repository
+    file_summary_result,
+    repository_summary_result
 )
-import json
 
 router = APIRouter(prefix="/summary", tags=["summary"])
 
 @router.get("/file/{file_id}")
 async def get_file_summary(
     file_id: str,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
@@ -28,7 +27,7 @@ async def get_file_summary(
         raise HTTPException(404, "File not found")
 
     # Use cached or generate lazily
-    summary = await generate_file_summary_lazy(db, file_id)
+    summary, cached = await file_summary_result(db, file_id, force)
 
     return {
         "file_id": file_id,
@@ -36,12 +35,13 @@ async def get_file_summary(
         "language": file.language,
         "importance_level": file.importance_level,
         "summary": summary,
-        "cached": file.summary is not None
+        "cached": cached
     }
 
 @router.get("/repository/{repo_id}")
 async def get_repository_summary(
     repo_id: str,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
@@ -75,35 +75,13 @@ async def get_repository_summary(
             "summary": f.summary
         })
 
-    # Generate repo summary on demand
-    languages = {}
-    try:
-        languages = json.loads(repo.languages or "{}")
-    except Exception:
-        pass
-
-    important_files = [
-        {
-            "path": f.path,
-            "importance_level": f.importance_level,
-            "num_classes": f.num_classes,
-            "num_functions": f.num_functions
-        }
-        for f in files
-    ]
-
-    repo_summary = await summarize_repository(
-        repo_name=repo.name,
-        total_files=repo.total_files,
-        total_loc=repo.total_loc,
-        languages=languages,
-        important_files=important_files
-    )
+    repo_summary, cached = await repository_summary_result(db, repo_id, force)
 
     return {
         "repository_id": repo_id,
         "repository_name": repo.name,
         "summary": repo_summary,
+        "cached": cached,
         "files": file_summaries
     }
 

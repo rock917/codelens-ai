@@ -26,7 +26,8 @@ from app.services.file_filter import (
     MAX_FILE_SIZE,
 )
 
-from app.services.parser.parser_factory import ParserFactory
+from app.services.cached_processing import parse as cached_parse, pipeline_version
+from app.services import result_cache
 from app.services.importance_scorer import calculate_importance_score
 from app.services.chunker import chunk_parsed_file
 from app.services.vector_indexing import index_repository_vectors
@@ -40,7 +41,7 @@ def generate_id() -> str:
 
 
 def hash_file(file_path: str) -> str:
-    hasher = hashlib.md5()
+    hasher = hashlib.sha256()
 
     try:
         with open(file_path, "rb") as f:
@@ -380,7 +381,8 @@ async def index_directory(
         ):
 
             parsed = await asyncio.to_thread(
-                ParserFactory.parse_file,
+                cached_parse,
+                repo_id,
                 raw["path"],
                 content,
                 lang,
@@ -582,6 +584,7 @@ async def index_directory(
         await update_repository_status(db, repo_id, RepositoryStatus.ANALYZING)
         await index_repository_vectors(db, repo_id)
 
+    await asyncio.to_thread(result_cache.write, repo_id, "index-version", pipeline_version())
     return file_records
 
 

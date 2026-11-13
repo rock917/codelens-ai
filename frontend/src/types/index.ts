@@ -60,7 +60,7 @@ export interface AnalysisSummary {
   by_severity: Record<string, number>
   by_type: Record<string, number>
   health_score: number | null
-  analysis_status: 'NOT_RUN' | 'LEGACY' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  analysis_status: 'NOT_RUN' | 'LEGACY' | 'STALE' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
   coverage: { scanned_files: number, scanned_loc: number, unsupported_files: number } | null
   completed_at: string | null
   error_message: string | null
