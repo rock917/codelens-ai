@@ -873,6 +873,77 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         counts = (await self.client.get('/repositories/usage')).json()
         self.assertEqual((counts['used'], counts['reserved']), (1, 1))
 
+    async def test_repository_url_punctuation_normalization(self):
+        from app.services.admission_service import normalize_url
+        for name in ('-crop-prediction-model', '.github', '_project', '--repo', 'repo-',
+                     'my.repo_v2-1', 'repo..name', 'a' * 100):
+            with self.subTest(name=name):
+                expected = 'https://github.com/rock917/' + name
+                for url in (expected, expected + '/', expected + '.git', expected + '.git/',
+                            '  https://GITHUB.com:443/Rock917/' + name + '  '):
+                    self.assertEqual(normalize_url(url), expected)
+                    self.assertEqual(normalize_url(normalize_url(url)), expected)
+        self.assertEqual(normalize_url('https://github.com/rock917/%2Dcrop%2Dprediction%2Dmodel.git/'),
+                         'https://github.com/rock917/-crop-prediction-model')
+        for path in ('Team/Sub.Group/repo_name', 'Team/_sub/.project', 'Team/repo--v2', 'Team/project.'):
+            self.assertEqual(normalize_url('https://gitlab.com/' + path + '.git/'), 'https://gitlab.com/' + path)
+
+    async def test_repository_url_rejects_unsafe_paths_without_credit_or_network(self):
+        from app.services.admission_service import normalize_url
+        from fastapi import HTTPException
+        bad = [
+            'http://github.com/owner/repo', 'ssh://git@github.com/owner/repo',
+            'file:///tmp/repo', 'https://localhost/owner/repo',
+            'https://github.com.evil.test/owner/repo', 'https://github.com@evil.test/owner/repo',
+            'https://user:password@github.com/owner/repo', 'https://@github.com/owner/repo',
+            'https://github.com:22/owner/repo', 'https://github.com:/owner/repo',
+            'https://github.com/owner/repo?token=value', 'https://github.com/owner/repo#readme',
+            'https://github.com/owner/repo/tree/main', 'https://gitlab.com/team/repo/-/tree/main',
+            'https://github.com/owner', 'https://github.com//owner/repo',
+            'https://github.com/owner//repo', 'https://github.com/owner/repo//',
+            'https://github.com/owner/.', 'https://github.com/owner/..',
+            'https://github.com/owner/%2e%2e', 'https://github.com/owner/a%2fb',
+            'https://github.com/owner/a%5cb', 'https://github.com/owner/%252e%252e',
+            'https://github.com/owner/a%00b', 'https://github.com/owner/%ff',
+            'https://github.com/owner/re\npo', 'https://git\thub.com/owner/repo',
+            'https://github.com/owner/repo space', 'https://github.com/owner/repo+name',
+            'https://github.com/owner/repo;command', 'https://github.com/owner/$(command)',
+            'https://github.com/owner/emoji😀', 'https://github.com/owner/.git',
+            'https://github.com/owner/' + 'a' * 101,
+            'https://gitlab.com/-team/repo', 'https://gitlab.com/team/-repo',
+            'https://gitlab.com/team./repo', 'https://gitlab.com/team/repo.atom',
+        ]
+        before = (await self.client.get('/repositories/usage')).json()
+        with patch('app.api.routes.repository.resolve_revision', new=AsyncMock()) as remote:
+            for url in bad:
+                with self.subTest(url=url):
+                    with self.assertRaises(HTTPException):
+                        normalize_url(url)
+                    response = await self.client.post('/repositories/github', json={'url': url})
+                    self.assertEqual(response.status_code, 400, response.text)
+            remote.assert_not_awaited()
+        self.assertEqual((await self.client.get('/repositories/usage')).json(), before)
+
+    async def test_leading_hyphen_repo_admission_and_safe_git_arguments(self):
+        from app.services.admission_service import resolve_revision
+        url = 'https://github.com/rock917/-crop-prediction-model'
+        with patch('app.api.routes.repository.resolve_revision', new=AsyncMock(return_value='a' * 40)) as lookup, patch('app.api.routes.repository.run_github_ingestion', new=AsyncMock()) as worker:
+            first = await self.client.post('/repositories/github', json={'url': url})
+            second = await self.client.post('/repositories/github', json={'url': url + '.git/'})
+            encoded = await self.client.post('/repositories/github', json={'url': url.replace('/-crop', '/%2Dcrop')})
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(second.json()['id'], first.json()['id'])
+            self.assertEqual(encoded.json()['id'], first.json()['id'])
+            self.assertTrue(second.json()['reused'])
+            worker.assert_awaited_once_with(first.json()['id'], url, 'a' * 40)
+            self.assertEqual(lookup.call_args.args, (url,))
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['reserved'], 1)
+        from subprocess import CompletedProcess
+        with patch('app.services.admission_service.subprocess.run', return_value=CompletedProcess([], 0, stdout='a' * 40 + '\tHEAD\n')) as process:
+            self.assertEqual(await resolve_revision(url), 'a' * 40)
+            self.assertEqual(process.call_args.args[0], ['git', '-c', 'credential.helper=', 'ls-remote', '--', url, 'HEAD'])
+            self.assertNotIn('shell', process.call_args.kwargs)
+
     async def test_analysis_lifecycle_and_atomic_rescan(self):
         repo_id = await self.upload()
         path = f'/analysis/{repo_id}'

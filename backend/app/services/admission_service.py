@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, unquote
 
 from fastapi import HTTPException
 from sqlalchemy import select, update, func
@@ -19,22 +19,42 @@ LIMIT = 10
 
 def normalize_url(value):
     try:
-        url = urlsplit(value.strip())
-        path = url.path.rstrip('/').removesuffix('.git')
-        parts = path.strip('/').split('/')
-        if (url.scheme != 'https' or url.hostname not in ('github.com', 'gitlab.com')
-                or url.username or url.password or url.port not in (None, 443)
-                or url.query or url.fragment or len(parts) < 2
-                or (url.hostname == 'github.com' and len(parts) != 2)
-                or any(not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', part) or part in ('.', '..') for part in parts)):
+        # urlsplit silently removes some control characters; reject them before parsing.
+        if len(value) > 4096 or re.search(r'[\x00-\x1f\x7f]', value):
             raise ValueError()
+        url = urlsplit(value.strip())
+        if (url.scheme != 'https' or url.hostname not in ('github.com', 'gitlab.com')
+                or not re.fullmatch(r'(?:github\.com|gitlab\.com)(?::443)?', url.netloc, re.I)
+                or url.query or url.fragment or not url.path.startswith('/')):
+            raise ValueError()
+        # Remove at most one trailing slash, so empty path segments are not hidden.
+        path = url.path.removesuffix('/')
+        parts = [unquote(part, errors='strict') for part in path[1:].split('/')]
+        parts[-1] = parts[-1].removesuffix('.git')
+        if (len(parts) < 2 or any(not re.fullmatch(r'[A-Za-z0-9_.-]+', part)
+                                or part in ('.', '..') for part in parts)):
+            raise ValueError()
+        if url.hostname == 'github.com':
+            # Owner and repository names have different rules. Repository names
+            # may start with any supported punctuation, including '-' and '.'.
+            if (len(parts) != 2 or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', parts[0])
+                    or len(parts[1]) > 100):
+                raise ValueError()
+        else:
+            # GitLab permits leading dots/underscores and nested namespaces, but
+            # reserves a leading '-' (including /-/tree/... browser routes).
+            # Leave existence/reserved-name checks to the Git remote lookup.
+            if any(part.startswith('-') or part.endswith(('.git', '.atom')) for part in parts):
+                raise ValueError()
+            if any(part.endswith('.') for part in parts[:-1]):
+                raise ValueError()
         # GitHub paths are case insensitive; GitLab namespaces can be case sensitive.
         path = '/'.join(parts)
         if url.hostname == 'github.com':
             path = path.lower()
         return f'https://{url.hostname}/{path}'
-    except ValueError:
-        raise HTTPException(400, 'Enter an HTTPS GitHub or GitLab repository root URL.')
+    except (ValueError, UnicodeError):
+        raise HTTPException(400, 'Enter an HTTPS GitHub or GitLab repository root URL, without a branch/file path, query or fragment. Repository names can contain letters, numbers, dots (.), hyphens (-) and underscores (_); GitLab paths cannot start with a hyphen. No credit was used.')
 
 
 async def resolve_revision(url):
