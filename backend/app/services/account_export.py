@@ -112,7 +112,7 @@ async def build_export(user):
     spool = None
     try:
         spool = tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode='w+b')
-        encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False, default=json_default, separators=(',', ':'))
+        encoder = json.JSONEncoder(ensure_ascii=False, allow_nan=False, default=json_default, indent=2)
 
         def write(value):
             encoded = value.encode('utf-8')
@@ -120,9 +120,12 @@ async def build_export(user):
                 raise HTTPException(413, 'Your export exceeds the 25 MiB download limit. Contact support for a larger export; no partial export was created.')
             spool.write(encoded)
 
-        def encode(value):
+        def encode(value, level=1):
+            # Indent each streamed value within its surrounding object/array.
+            # Newlines inside stored strings remain JSON escapes, preserving data.
+            padding = '  ' * level
             for part in encoder.iterencode(value):
-                write(part)
+                write(part.replace('\n', '\n' + padding))
 
         now = datetime.now(timezone.utc)
         counts = {}
@@ -132,15 +135,15 @@ async def build_export(user):
                 await db.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'))
             else:
                 await db.execute(text('BEGIN'))
-            write('{"schema_version":1,"exported_at":')
+            write('{\n  "schema_version": 1,\n  "exported_at": ')
             encode(now)
-            write(',"account":')
+            write(',\n  "account": ')
             encode({'id': user.id, 'email': user.email})
-            write(',"usage":')
+            write(',\n  "usage": ')
             encode(await usage(db, user.id))
             total = 0
             for name, query in queries(user.id):
-                write(',' + json.dumps(name) + ':[')
+                write(',\n  ' + json.dumps(name) + ': [')
                 count = 0
                 result = await db.stream(query.execution_options(yield_per=50))
                 try:
@@ -148,21 +151,20 @@ async def build_export(user):
                         total += 1
                         if total > MAX_ROWS:
                             raise HTTPException(413, 'Your export exceeds the row limit. Contact support for a larger export; no partial export was created.')
-                        if count:
-                            write(',')
-                        encode(normalize(name, row))
+                        write(',\n    ' if count else '\n    ')
+                        encode(normalize(name, row), level=2)
                         count += 1
                         if count % 50 == 0:
                             await asyncio.sleep(0)
                 finally:
                     await result.close()
                 counts[name] = count
-                write(']')
-            write(',"manifest":')
+                write('\n  ]' if count else ']')
+            write(',\n  "manifest": ')
             encode({'row_counts': counts, 'included': list(counts),
                     'excluded': ['source_file_archives', 'code_chunks', 'vector_indexes', 'authentication_secrets', 'server_logs'],
                     'notes': 'Saved data snapshot, not a restorable backup. IDs link records across arrays. Chats, summaries, signatures and findings may contain source excerpts. In-progress work may not yet be saved. No AI generation or analysis credit used.'})
-            write('}')
+            write('\n}\n')
         return ExportResponse(spool, user.id, now.strftime('codelens-data-%Y%m%dT%H%M%SZ.json'))
     except BaseException as exc:
         if spool is not None:

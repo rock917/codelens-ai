@@ -11,6 +11,11 @@ IDs link records across arrays; the manifest includes row counts. Structured JSO
 fields are decoded; older non-JSON text is retained. Timestamps without an offset
 reflect existing database timestamps (the service uses UTC).
 
+Downloads use readable JSON with two-space indentation and separate lines for
+fields and records. Formatting is streamed into the existing bounded spool;
+the 25 MiB limit includes whitespace. Long chat messages remain intact JSON strings
+(their embedded line breaks are escaped as `\n`) so exported content is unchanged.
+
 This is a portable data copy, not a restore archive. Source-file archives,
 raw code chunks, embeddings/vector indexes, authentication secrets and server logs
 are excluded. Chats, findings, summaries and symbol signatures/docstrings can
