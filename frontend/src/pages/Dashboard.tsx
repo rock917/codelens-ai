@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import TopBar from '../components/layout/TopBar'
 import UsageBanner from '../components/UsageBanner'
+import DashboardWelcome from '../components/DashboardWelcome'
 import { getRepositories, getAnalysisSummary, getRepositoryStats } from '../services/api'
 import type { Repository } from '../types'
 
@@ -133,6 +134,7 @@ export default function Dashboard() {
       <UsageBanner refreshKey={repos.map(r => r.id + r.status).join(',')} />
 
       <div style={{ padding: '24px', flex: 1, overflow: 'auto' }}>
+        <DashboardWelcome />
 
         {/* Hero if no repos */}
         {repos.length === 0 && !loading && (
@@ -149,7 +151,7 @@ export default function Dashboard() {
               <Zap size={28} color="var(--on-primary)" />
             </div>
             <h2 style={{ fontSize: '22px', fontWeight: '700', marginBottom: '8px' }}>
-              Welcome to CodeLens AI
+              Start with your first repository
             </h2>
             <p style={{ color: 'var(--text-muted)', marginBottom: '24px', maxWidth: '400px' }}>
               Upload a repository to get started. Get AI-powered insights, code analysis, and intelligent chat.
