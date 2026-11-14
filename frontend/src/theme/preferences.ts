@@ -5,7 +5,7 @@ export const themes = [
   { id: 'arctic-light', name: 'Arctic Light', description: 'A bright workspace with crisp blue details.', short: 'Light' },
 ] as const
 export type ThemeId = typeof themes[number]['id']
-export const DEFAULT_THEME: ThemeId = 'midnight-violet'
+export const DEFAULT_THEME: ThemeId = 'cyber-cyan'
 export const LAST_THEME_KEY = 'codelens.theme.v1.last'
 export const themeKey = (userId?: string) => `codelens.theme.v1.${userId || 'guest'}`
 export function isTheme(value: unknown): value is ThemeId {

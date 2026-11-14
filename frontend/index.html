@@ -6,10 +6,10 @@
       // Apply the last validated palette before styles or React paint.
       try {
         var theme = localStorage.getItem('codelens.theme.v1.last');
-        if (!['midnight-violet', 'cyber-cyan', 'emerald-matrix', 'arctic-light'].includes(theme)) theme = 'midnight-violet';
+        if (!['midnight-violet', 'cyber-cyan', 'emerald-matrix', 'arctic-light'].includes(theme)) theme = 'cyber-cyan';
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.colorScheme = theme === 'arctic-light' ? 'light' : 'dark';
-      } catch (_) { document.documentElement.dataset.theme = 'midnight-violet'; }
+      } catch (_) { document.documentElement.dataset.theme = 'cyber-cyan'; }
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

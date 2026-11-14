@@ -22,9 +22,9 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks() })
 const app = () => <MemoryRouter><ThemeProvider><Appearance /></ThemeProvider></MemoryRouter>
 const select = (name: string) => fireEvent.click(screen.getByRole('button', { name }))
 
-it('defaults to Midnight Violet and restores a guest choice after a refresh', () => {
+it('defaults to Cyber Cyan and restores a guest choice after a refresh', () => {
   const view = render(app())
-  expect(screen.getByRole('button', { name: 'Midnight Violet' }).getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Cyber Cyan' }).getAttribute('aria-pressed')).toBe('true')
   select('Arctic Light')
   expect(document.documentElement.dataset.theme).toBe('arctic-light')
   expect(document.documentElement.style.colorScheme).toBe('light')
@@ -48,7 +48,7 @@ it('applies immediately, serializes rapid selections and saves the latest choice
   mocks.auth.session = { user: { id: 'a', user_metadata: {} } }
   let finish!: (value: { error: null }) => void
   mocks.updateUser.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-  render(app()); select('Cyber Cyan')
+  render(app()); select('Midnight Violet')
   await waitFor(() => expect(mocks.updateUser).toHaveBeenCalledTimes(1))
   select('Emerald Matrix'); select('Arctic Light')
   expect(document.documentElement.dataset.theme).toBe('arctic-light')
@@ -61,12 +61,12 @@ it('applies immediately, serializes rapid selections and saves the latest choice
 it('retains a failed save across refresh and allows retry without claiming account sync', async () => {
   mocks.auth.session = { user: { id: 'a', user_metadata: { codelens_theme: DEFAULT_THEME } } }
   mocks.updateUser.mockResolvedValueOnce({ error: new Error('offline') })
-  const view = render(app()); select('Cyber Cyan')
+  const view = render(app()); select('Midnight Violet')
   await screen.findByText(/Account sync failed/)
   expect(readTheme('a')?.pending).toBe(true)
   view.unmount(); render(app())
-  expect(document.documentElement.dataset.theme).toBe('cyber-cyan')
-  select('Cyber Cyan'); await screen.findByText('Saved to your account.')
+  expect(document.documentElement.dataset.theme).toBe('midnight-violet')
+  select('Midnight Violet'); await screen.findByText('Saved to your account.')
   expect(readTheme('a')?.pending).toBe(false)
 })
 it('rejects invalid cache and metadata values and tolerates blocked storage', () => {
@@ -79,11 +79,11 @@ it('rejects invalid cache and metadata values and tolerates blocked storage', ()
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
   expect(cacheTheme('arctic-light')).toBe(false)
 })
-it('reflects another tab’s change for the same account only', () => {
+it('reflects changes from another tab for the same account only', () => {
   render(app())
-  cacheTheme('cyber-cyan')
+  cacheTheme('emerald-matrix')
   fireEvent(window, new StorageEvent('storage', { key: themeKey('another-user') }))
   expect(document.documentElement.dataset.theme).toBe(DEFAULT_THEME)
   fireEvent(window, new StorageEvent('storage', { key: themeKey() }))
-  expect(document.documentElement.dataset.theme).toBe('cyber-cyan')
+  expect(document.documentElement.dataset.theme).toBe('emerald-matrix')
 })

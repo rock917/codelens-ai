@@ -29,6 +29,17 @@ function show(element = <Login />) {
 }
 
 describe('account forms', () => {
+  it('toggles password visibility without losing the value or submitting', async () => {
+    show(); const user = userEvent.setup()
+    const input = screen.getByLabelText('Password') as HTMLInputElement
+    await user.type(input, 'a-long-password')
+    await user.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(input.type).toBe('text')
+    expect(input.value).toBe('a-long-password')
+    expect(mocks.auth.signInWithPassword).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Hide password' }))
+    expect(input.type).toBe('password')
+  })
   it('submits email and password to Auth', async () => {
     show(); const user = userEvent.setup()
     await user.type(screen.getByLabelText('Email address'), 'friend@example.com')
@@ -38,7 +49,7 @@ describe('account forms', () => {
   })
   it('creates an account with the confirmation callback', async () => {
     show(); const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'New here? Create an account' }))
+    await user.click(screen.getByRole('button', { name: 'Create an account' }))
     await user.type(screen.getByLabelText('Email address'), 'friend@example.com')
     await user.type(screen.getByLabelText('Password'), 'a-long-password')
     await user.click(screen.getByRole('button', { name: 'Create account', exact: true }))
@@ -99,7 +110,7 @@ describe('OAuth-only launch', () => {
     expect(screen.queryByLabelText('Email address')).toBeNull()
     expect(screen.queryByLabelText('Password')).toBeNull()
     expect(screen.queryByText('Forgot password?')).toBeNull()
-    expect(screen.queryByText('New here? Create an account')).toBeNull()
+    expect(screen.queryByText('Create an account')).toBeNull()
   })
   it('prevents direct navigation to the password-reset form', async () => {
     mocks.features.emailAuthEnabled = false

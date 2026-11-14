@@ -1,5 +1,5 @@
 /* All application colors live here. data-theme also scopes the preview cards. */
-:root, [data-theme="midnight-violet"] {
+[data-theme="midnight-violet"] {
   color-scheme:dark;
   --bg-base:#0a0a0f; --bg-surface:#111118; --bg-elevated:#16161f;
   --border:#292637; --border-bright:#57516b;
@@ -13,7 +13,7 @@
   --syntax-keyword:#d6a3ed; --syntax-string:#aad58d; --syntax-number:#e8b27d;
   --syntax-function:#84c7ff; --syntax-tag:#f3969e; --syntax-literal:#79d3df;
 }
-[data-theme="cyber-cyan"] {
+:root:not([data-theme]), [data-theme="cyber-cyan"] {
   color-scheme:dark;
   --bg-base:#061117; --bg-surface:#0b1c25; --bg-elevated:#102a35;
   --border:#23424f; --border-bright:#426777;
@@ -53,6 +53,7 @@
   --syntax-function:#1855a0; --syntax-tag:#a62c45; --syntax-literal:#146973;
 }
 :root, [data-theme] {
+  --provider-surface:#ffffff; --provider-text:#17212b;
   --primary-glow:color-mix(in srgb,var(--primary) 15%,transparent);
   --accent-glow:color-mix(in srgb,var(--accent) 15%,transparent);
   --success-glow:color-mix(in srgb,var(--success) 12%,transparent);

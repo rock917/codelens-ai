@@ -2,7 +2,7 @@ import { Check, Palette } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useTheme } from './ThemeProvider'
-import { themes } from './preferences'
+import { DEFAULT_THEME, themes } from './preferences'
 import './appearance.css'
 
 export default function Appearance() {
@@ -24,9 +24,9 @@ export default function Appearance() {
         </span>
         <span className="theme-option-label"><strong>{option.name}</strong>{theme === option.id && <Check size={17} aria-hidden="true" />}</span>
         <span className="theme-description">{option.description}</span>
-        <span className="theme-state">{theme === option.id ? 'Selected' : option.id === 'midnight-violet' ? 'Default theme' : 'Select theme'}</span>
+        <span className="theme-state">{theme === option.id ? 'Selected' : option.id === DEFAULT_THEME ? 'Default theme' : 'Select theme'}</span>
       </button>)}
     </div>
-    <p className="theme-save-status" role="status">{saving ? 'Saving your preference…' : message || 'Midnight Violet is the default. Your choice follows your account.'}</p>
+    <p className="theme-save-status" role="status">{saving ? 'Saving your preference…' : message || 'Cyber Cyan is the default. Your choice follows your account.'}</p>
   </section>
 }
