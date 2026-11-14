@@ -5,6 +5,7 @@ from sqlalchemy import select, func
 from app.database.base import get_db
 from app.models.repository import Repository, AnalysisIssue, File, RepositoryJob
 from app.services.analyzer.analysis_engine import run_analysis_job, calculate_health_score, analysis_key
+from app.services.analyzer.scoring_policy import HEALTH_RULES, SECURITY_RULES, RETIRED_RULES, SCORE_VERSION, score_impact
 import asyncio
 import json
 import uuid
@@ -50,7 +51,7 @@ async def trigger_analysis(
                     saved = json.loads(completed.message or '{}')
                 except (ValueError, OSError):
                     saved, key = {}, None
-                if key and isinstance(saved, dict) and saved.get('cache_key') == key:
+                if key and isinstance(saved, dict) and saved.get('score_version') == SCORE_VERSION and saved.get('cache_key') == key:
                     return {"message": "Using saved results", "repository_id": repo_id, "job_id": completed.id, "cached": True}
         job = RepositoryJob(id=str(uuid.uuid4()), repository_id=repo_id,
                             job_type='ANALYSIS', status='RUNNING',
@@ -71,8 +72,8 @@ async def get_issues(
     await owned_repository(db, repo_id, user.id)
     query = (
         select(AnalysisIssue, File.path)
-        .join(File, AnalysisIssue.file_id == File.id)
-        .where(AnalysisIssue.repository_id == repo_id)
+        .outerjoin(File, AnalysisIssue.file_id == File.id)
+        .where(AnalysisIssue.repository_id == repo_id, AnalysisIssue.issue_type.not_in(RETIRED_RULES))
     )
 
     if severity:
@@ -90,9 +91,12 @@ async def get_issues(
 
     issues = []
     for issue, file_path in rows:
+        affects_health, score_reason = score_impact(issue.issue_type)
         issues.append({
             "id": issue.id,
-            "file_path": file_path,
+            "file_path": file_path or '(repository)',
+            "affects_health": affects_health,
+            "score_reason": score_reason,
             "issue_type": issue.issue_type,
             "severity": issue.severity,
             "message": issue.message,
@@ -116,7 +120,7 @@ async def get_analysis_summary(
     if not repo:
         raise HTTPException(404, "Repository not found")
 
-    # Count by severity
+    # Only evidence-bearing rules affect health; suggestions are counted separately.
     severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
     counts = {}
     for severity in severities:
@@ -124,6 +128,7 @@ async def get_analysis_summary(
             select(func.count(AnalysisIssue.id))
             .where(
                 AnalysisIssue.repository_id == repo_id,
+                AnalysisIssue.issue_type.in_(HEALTH_RULES),
                 AnalysisIssue.severity == severity
             )
         )
@@ -135,13 +140,20 @@ async def get_analysis_summary(
             AnalysisIssue.issue_type,
             func.count(AnalysisIssue.id)
         )
-        .where(AnalysisIssue.repository_id == repo_id)
+        .where(AnalysisIssue.repository_id == repo_id, AnalysisIssue.issue_type.in_(HEALTH_RULES))
         .group_by(AnalysisIssue.issue_type)
         .order_by(func.count(AnalysisIssue.id).desc())
     )
     by_type = {row[0]: row[1] for row in type_result.all()}
 
     total = sum(counts.values())
+    suggestions = await db.scalar(select(func.count(AnalysisIssue.id)).where(
+        AnalysisIssue.repository_id == repo_id,
+        AnalysisIssue.issue_type.not_in(HEALTH_RULES | RETIRED_RULES),
+    )) or 0
+    security_counts = dict((await db.execute(select(AnalysisIssue.severity, func.count(AnalysisIssue.id)).where(
+        AnalysisIssue.repository_id == repo_id, AnalysisIssue.issue_type.in_(SECURITY_RULES),
+    ).group_by(AnalysisIssue.severity))).all())
     jobs = (await db.scalars(select(RepositoryJob).where(
         RepositoryJob.repository_id == repo_id, RepositoryJob.job_type == 'ANALYSIS',
     ).order_by(RepositoryJob.created_at.desc(), RepositoryJob.id.desc()))).all()
@@ -154,11 +166,13 @@ async def get_analysis_summary(
     status = latest.status if latest else ('LEGACY' if total else 'NOT_RUN')
     score = None
     if coverage and coverage['scanned_files'] > 0:
-        score = calculate_health_score(counts, coverage['scanned_loc'])
+        score = calculate_health_score(counts, coverage['scanned_loc'], security_counts)
 
     return {
         "repository_id": repo_id,
         "total_issues": total,
+        "total_suggestions": suggestions,
+        "total_findings": total + suggestions,
         "by_severity": counts,
         "by_type": by_type,
         "health_score": score,
@@ -166,5 +180,6 @@ async def get_analysis_summary(
         "coverage": coverage,
         "completed_at": completed.updated_at if completed else None,
         "error_message": latest.error_message if latest else None,
-        "score_version": "density-v1",
+        "score_version": SCORE_VERSION,
+        "requires_rescan": bool(completed and coverage and coverage.get('score_version') != SCORE_VERSION),
     }

@@ -121,18 +121,6 @@ def _analyze_generic_smells(
                 suggestion="Address or track this technical debt item"
             ))
 
-    # Check for very long lines
-    for i, line in enumerate(lines, 1):
-        if len(line) > 120:
-            issues.append(SmellIssue(
-                file_path=file_path,
-                line=i,
-                issue_type="LONG_LINE",
-                severity="LOW",
-                message=f"Line {i} is {len(line)} characters long",
-                suggestion="Keep lines under 120 characters"
-            ))
-
     # Check for print statements in Python
     if language == "python":
         print_pattern = re.compile(r'^\s*print\s*\(')

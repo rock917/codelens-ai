@@ -1,7 +1,8 @@
+"""Conservative source checks: findings require review, not proof of exploitability."""
 import ast
 import re
-from typing import List
 from dataclasses import dataclass
+
 
 @dataclass
 class SecurityIssue:
@@ -11,150 +12,120 @@ class SecurityIssue:
     severity: str
     message: str
     suggestion: str
-    code_snippet: str = ""
+    code_snippet: str = ''
 
-# Patterns for detecting secrets
-SECRET_PATTERNS = [
-    (r'(?i)(password|passwd|pwd)\s*=\s*["\'][^"\']{3,}["\']', "HARDCODED_PASSWORD"),
-    (r'(?i)(secret|secret_key|api_key|apikey)\s*=\s*["\'][^"\']{3,}["\']', "HARDCODED_SECRET"),
-    (r'(?i)(token)\s*=\s*["\'][^"\']{8,}["\']', "HARDCODED_TOKEN"),
-    (r'(?i)(aws_access_key|aws_secret)\s*=\s*["\'][^"\']{8,}["\']', "HARDCODED_AWS_KEY"),
-]
 
-# Weak crypto patterns
-WEAK_CRYPTO_PATTERNS = [
-    (r'\bmd5\b', "WEAK_HASH_MD5", "MD5 is cryptographically broken"),
-    (r'\bsha1\b', "WEAK_HASH_SHA1", "SHA1 is weak for security use"),
-    (r'\bDES\b', "WEAK_CIPHER_DES", "DES is insecure"),
-    (r'algorithm\s*=\s*["\']HS256["\']', "WEAK_JWT_ALG", "HS256 with weak secret is vulnerable"),
-]
+SECRET_NAME = re.compile(r'(?:\w+_)?(?:password|passwd|pwd|secret|secret_key|api_key|apikey|token|access_token|aws_access_key|aws_secret)', re.I)
+PLACEHOLDERS = {'changeme', 'change_me', 'your_api_key', 'your_secret', 'your_password', 'your_token', 'placeholder', 'example', 'dummy', 'test', 'test-only-no-network'}
 
-def analyze_security(
-    file_path: str,
-    content: str,
-    language: str
-) -> List[SecurityIssue]:
+
+def credential_type(name, value):
+    if not SECRET_NAME.fullmatch(name) or not isinstance(value, str) or len(value.strip()) < 4:
+        return None
+    if value.strip().lower() in PLACEHOLDERS or value.strip().startswith(('${', '{{', '<')):
+        return None
+    if 'password' in name.lower() or name.lower() in ('passwd', 'pwd'):
+        return 'HARDCODED_PASSWORD'
+    return 'HARDCODED_SECRET'
+
+
+def analyze_security(file_path, content, language):
     issues = []
-    lines = content.splitlines()
+    seen = set()
+    def add(line, kind, severity, message, suggestion):
+        if (line, kind) not in seen:
+            seen.add((line, kind))
+            issues.append(SecurityIssue(file_path, line, kind, severity, message, suggestion))
 
-    # 1. Pattern-based detection (all languages)
-    for i, line in enumerate(lines, 1):
-        line_stripped = line.strip()
-
-        # Skip comments
-        if line_stripped.startswith('#') or line_stripped.startswith('//'):
-            continue
-
-        # Check secret patterns
-        for pattern, issue_type in SECRET_PATTERNS:
-            if re.search(pattern, line):
-                issues.append(SecurityIssue(
-                    file_path=file_path,
-                    line=i,
-                    issue_type=issue_type,
-                    severity="CRITICAL",
-                    message=f"Hardcoded credential detected",
-                    suggestion="Use environment variables or a secrets manager",
-                    code_snippet=line.strip()[:100]
-                ))
-
-        # Check weak crypto
-        for pattern, issue_type, desc in WEAK_CRYPTO_PATTERNS:
-            if re.search(pattern, line, re.IGNORECASE):
-                issues.append(SecurityIssue(
-                    file_path=file_path,
-                    line=i,
-                    issue_type=issue_type,
-                    severity="HIGH",
-                    message=desc,
-                    suggestion="Use SHA-256 or stronger algorithms",
-                    code_snippet=line.strip()[:100]
-                ))
-
-    # 2. Python-specific AST analysis
-    if language == "python":
-        issues.extend(_analyze_python_security(file_path, content, lines))
-
-    return issues
-
-
-def _analyze_python_security(
-    file_path: str,
-    content: str,
-    lines: List[str]
-) -> List[SecurityIssue]:
-    issues = []
+    if language != 'python':
+        # Limited JS/TS literal/call checks. No claim of full syntax or data-flow coverage.
+        in_comment = False
+        for number, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            if in_comment:
+                in_comment = '*/' not in stripped
+                continue
+            if stripped.startswith('/*'):
+                in_comment = '*/' not in stripped
+                continue
+            if stripped.startswith(('#', '//')):
+                continue
+            match = re.match(r'''\s*(?:(?:export\s+)?(?:const|let|var)\s+)?([\w]+)\s*(?::\s*string\s*)?=\s*(["'])(.*?)\2\s*[;,]?\s*(?://.*)?$''', line)
+            if match:
+                kind = credential_type(match[1], match[3])
+                if kind:
+                    add(number, kind, 'HIGH', 'Possible hardcoded credential in a string literal', 'Review the value; load real credentials from a secrets manager')
+            match = re.search(r'''\b(?:crypto\.)?createHash\(\s*['"](md5|sha1)['"]\s*\)''', line, re.I)
+            if match:
+                add(number, 'WEAK_HASH_' + match[1].upper(), 'MEDIUM', 'Legacy hash requested; review whether it protects security-sensitive data', 'Use a modern hash when collision resistance is required')
+        return issues
 
     try:
         tree = ast.parse(content)
     except SyntaxError:
         return issues
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                aliases[alias.asname or alias.name.split('.')[0]] = alias.name if alias.asname else alias.name.split('.')[0]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = node.module + '.' + alias.name
+
+    def name(node):
+        if isinstance(node, ast.Name):
+            return aliases.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            return name(node.value) + '.' + node.attr
+        return ''
+
+    def dynamic_sql(node):
+        # Only inspect SQL expressions reaching execute(), never arbitrary strings.
+        if isinstance(node, ast.JoinedStr):
+            literals = [v.value for v in node.values if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+            dynamic = any(isinstance(v, ast.FormattedValue) for v in node.values)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+            literals = [v.value for v in ast.walk(node) if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+            dynamic = True
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'format' and isinstance(node.func.value, ast.Constant):
+            literals = [node.func.value.value] if isinstance(node.func.value.value, str) else []
+            dynamic = bool(node.args or node.keywords)
+        else:
+            return False
+        return dynamic and any(re.match(r'\s*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|WITH)\b', s, re.I) for s in literals)
 
     for node in ast.walk(tree):
-        # SQL injection detection
-        if isinstance(node, (ast.Call, ast.Expr)):
-            node_str = ast.dump(node)
-            if 'f"SELECT' in node_str or "f'SELECT" in node_str:
-                line = getattr(node, 'lineno', 0)
-                issues.append(SecurityIssue(
-                    file_path=file_path,
-                    line=line,
-                    issue_type="SQL_INJECTION",
-                    severity="CRITICAL",
-                    message="Possible SQL injection via f-string query",
-                    suggestion="Use parameterized queries instead",
-                    code_snippet=lines[line-1].strip()[:100] if line > 0 else ""
-                ))
-
-        # Unsafe exec/eval
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                if node.func.id in ('eval', 'exec'):
-                    line = node.lineno
-                    issues.append(SecurityIssue(
-                        file_path=file_path,
-                        line=line,
-                        issue_type="UNSAFE_EVAL",
-                        severity="CRITICAL",
-                        message=f"Use of {node.func.id}() is dangerous",
-                        suggestion="Avoid eval/exec with untrusted input",
-                        code_snippet=lines[line-1].strip()[:100]
-                    ))
-
-            # Unsafe deserialization
-            if isinstance(node.func, ast.Attribute):
-                if node.func.attr == 'loads':
-                    if isinstance(node.func.value, ast.Name):
-                        if node.func.value.id == 'pickle':
-                            line = node.lineno
-                            issues.append(SecurityIssue(
-                                file_path=file_path,
-                                line=line,
-                                issue_type="UNSAFE_DESERIALIZATION",
-                                severity="HIGH",
-                                message="pickle.loads() can execute arbitrary code",
-                                suggestion="Use JSON or safer serialization formats",
-                                code_snippet=lines[line-1].strip()[:100]
-                            ))
-
-        # OS command injection
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Attribute):
-                if node.func.attr in ('system', 'popen', 'run', 'call'):
-                    if isinstance(node.func.value, ast.Name):
-                        if node.func.value.id in ('os', 'subprocess'):
-                            if node.args:
-                                # Check if argument is not a literal
-                                if not isinstance(node.args[0], ast.Constant):
-                                    line = node.lineno
-                                    issues.append(SecurityIssue(
-                                        file_path=file_path,
-                                        line=line,
-                                        issue_type="COMMAND_INJECTION",
-                                        severity="CRITICAL",
-                                        message="Possible command injection vulnerability",
-                                        suggestion="Validate and sanitize all command inputs",
-                                        code_snippet=lines[line-1].strip()[:100]
-                                    ))
-
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Constant):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                identifier = target.id if isinstance(target, ast.Name) else target.attr if isinstance(target, ast.Attribute) else ''
+                kind = credential_type(identifier, node.value.value)
+                if kind:
+                    add(node.lineno, kind, 'HIGH', 'Possible hardcoded credential in a string literal', 'Review the value; load real credentials from a secrets manager')
+        if not isinstance(node, ast.Call):
+            continue
+        callee = name(node.func)
+        if callee in ('eval', 'exec', 'builtins.eval', 'builtins.exec'):
+            add(node.lineno, 'UNSAFE_EVAL', 'CRITICAL', f'Use of {callee}() can execute code', 'Avoid evaluating untrusted input; review its source')
+        if callee in ('pickle.load', 'pickle.loads'):
+            add(node.lineno, 'UNSAFE_DESERIALIZATION', 'HIGH', 'Loading pickle data can execute arbitrary code', 'Use a safer format for untrusted data')
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ('execute', 'executemany') and node.args and dynamic_sql(node.args[0]):
+            add(node.lineno, 'SQL_INJECTION', 'CRITICAL', 'Dynamically constructed SQL reaches a database execution call', 'Use parameterized queries to keep data separate from SQL')
+        shell = callee in ('os.system', 'os.popen') or (
+            callee in ('subprocess.run', 'subprocess.call', 'subprocess.Popen', 'subprocess.check_call', 'subprocess.check_output')
+            and any(k.arg == 'shell' and isinstance(k.value, ast.Constant) and k.value.value is True for k in node.keywords)
+        )
+        command = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == 'args'), None)
+        if shell and command is not None and not isinstance(command, ast.Constant):
+            add(node.lineno, 'COMMAND_INJECTION', 'CRITICAL', 'A dynamically constructed command is executed through a shell', 'Avoid shell=True; pass a validated argument list without a shell')
+        if any(k.arg == 'usedforsecurity' and isinstance(k.value, ast.Constant) and k.value.value is False for k in node.keywords):
+            continue
+        algorithm = callee.rsplit('.', 1)[-1] if callee in ('hashlib.md5', 'hashlib.sha1') else None
+        if callee == 'hashlib.new' and node.args and isinstance(node.args[0], ast.Constant):
+            algorithm = str(node.args[0].value).lower()
+        if algorithm in ('md5', 'sha1'):
+            add(node.lineno, 'WEAK_HASH_' + algorithm.upper(), 'MEDIUM', 'Legacy hash called; review whether it protects security-sensitive data', 'Use a modern hash when collision resistance is required')
+        if callee in ('Crypto.Cipher.DES.new', 'Cryptodome.Cipher.DES.new'):
+            add(node.lineno, 'WEAK_CIPHER_DES', 'HIGH', 'DES encryption is requested', 'Use a modern authenticated encryption scheme')
     return issues

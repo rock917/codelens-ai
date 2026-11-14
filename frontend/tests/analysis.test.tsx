@@ -16,6 +16,31 @@ beforeEach(() => {
   api.triggerAnalysis.mockResolvedValue({ data: {} })
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.resetAllMocks() })
+it('separates suggestions from health findings and explains their score impact', async () => {
+  api.getAnalysisSummary.mockResolvedValue({ data: { ...summary('COMPLETED', 79).data, total_issues: 1, total_suggestions: 1 } })
+  api.getIssues.mockResolvedValue({ data: [
+    { id: 'risk', issue_type: 'UNSAFE_DESERIALIZATION', severity: 'HIGH', file_path: 'app.py', message: 'Review pickle input', affects_health: true, score_reason: 'Loading pickle data can execute code.' },
+    { id: 'style', issue_type: 'DEBUG_PRINT', severity: 'LOW', file_path: 'app.py', message: 'Consider logging', affects_health: false, score_reason: 'This suggestion does not reduce health.' },
+  ] })
+  await act(async () => { render(<Analysis />) })
+  expect(screen.getByText('Review pickle input')).toBeTruthy()
+  expect(screen.queryByText('Consider logging')).toBeNull()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Suggestions (no score impact)' })) })
+  expect(screen.getByText('Consider logging')).toBeTruthy()
+  expect(screen.queryByText('Review pickle input')).toBeNull()
+  fireEvent.click(screen.getByText('Consider logging'))
+  expect(screen.getByText('This suggestion does not reduce health.')).toBeTruthy()
+  expect(screen.getByText('Suggestion · no score impact')).toBeTruthy()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'All findings' })) })
+  expect(screen.getByText('Review pickle input')).toBeTruthy()
+  expect(screen.getByText('Consider logging')).toBeTruthy()
+})
+it('explains that older scans need refreshed detectors without charging a credit', async () => {
+  api.getAnalysisSummary.mockResolvedValue({ data: { ...summary('COMPLETED', 100).data, requires_rescan: true } })
+  await act(async () => { render(<Analysis />) })
+  expect(screen.getByText(/Scoring rules have improved/).textContent).toContain('rescans use no credits')
+  expect(screen.getByText(/Line length is not checked/)).toBeTruthy()
+})
 it('polls until completion instead of stopping after three seconds', async () => {
   api.getAnalysisSummary.mockResolvedValue(summary('NOT_RUN'))
   await act(async () => { render(<Analysis />) })

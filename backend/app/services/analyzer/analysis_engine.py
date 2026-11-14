@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import json
 import logging
 import uuid
@@ -12,25 +13,27 @@ from app.services.analyzer.complexity_analyzer import analyze_complexity
 from app.services.analyzer.security_analyzer import analyze_security
 from app.services.analyzer.smell_analyzer import analyze_smells
 from app.config.settings import settings
+from app.services.analyzer.scoring_policy import SCORE_VERSION
 
 SUPPORTED_LANGUAGES = ("python", "javascript", "typescript", "notebook", "json", "java", "go", "cpp")
 logger = logging.getLogger(__name__)
 
 
-def calculate_health_score(counts: dict, scanned_loc: int) -> int:
+def calculate_health_score(counts: dict, scanned_loc: int, security_counts: dict | None = None) -> int:
     """Heuristic: severity-weighted findings per 1,000 scanned lines.
 
     The 1,000-line floor avoids exaggerated penalties on tiny repositories.
-    A density of 20 gives 50/100; critical/high findings cap the rating.
+    A density of 20 gives 50/100; critical/high security findings cap the rating.
     This is a prioritization signal, not a security certification.
     """
     weighted = sum(counts.get(level, 0) * weight for level, weight in
                    (("CRITICAL", 15), ("HIGH", 8), ("MEDIUM", 3), ("LOW", 1)))
     density = weighted * 1000 / max(1000, scanned_loc)
     score = round(100 / (1 + density / 20))
-    if counts.get("CRITICAL", 0):
+    caps = counts if security_counts is None else security_counts
+    if caps.get("CRITICAL", 0):
         score = min(score, 49)
-    elif counts.get("HIGH", 0):
+    elif caps.get("HIGH", 0):
         score = min(score, 79)
     return score
 
@@ -60,7 +63,8 @@ def snapshot_key(sources, files):
     from app.services import result_cache as cache
     version = cache.code_version('analyzer/analysis_engine.py', 'analyzer/complexity_analyzer.py',
                                  'analyzer/security_analyzer.py', 'analyzer/smell_analyzer.py', 'documents.py',
-                                 'analyzer/compiled_analyzer.py', 'parser/compiled_parser.py', '../../requirements.txt')
+                                 'analyzer/compiled_analyzer.py', 'analyzer/scoring_policy.py',
+                                 'parser/compiled_parser.py', '../../requirements.txt')
     return cache.fingerprint(version, sorted(sources), sorted([tuple(f) for f in files]))
 
 
@@ -112,9 +116,21 @@ def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
                     else:
                         notebook_skipped += 1
                         exclusions.append({'path': path, 'reason': f"Cell {cell['number']}: {cell['reason']}"})
-        if units:
-            scanned_files += 1
+        checked_units = []
         for source, unit_language, offset, label in units:
+            if unit_language == 'python':
+                try:
+                    ast.parse(source)
+                except SyntaxError:
+                    if language == 'notebook':
+                        notebook_scanned -= 1
+                        notebook_skipped += 1
+                    exclusions.append({'path': path, 'reason': label + 'Python syntax could not be parsed; excluded from health scoring.'})
+                    continue
+            checked_units.append((source, unit_language, offset, label))
+        if checked_units:
+            scanned_files += 1
+        for source, unit_language, offset, label in checked_units:
             scanned_loc += len(source.splitlines())
             for analyzer in (analyze_complexity, analyze_security, analyze_smells):
                 for issue in analyzer(path, source, unit_language):
@@ -123,7 +139,7 @@ def _scan_files(repo_id: str, files: list) -> tuple[list, dict]:
                         issue_type=issue.issue_type, severity=issue.severity,
                         message=label + issue.message, line=(issue.line + offset) if issue.line else None, suggestion=issue.suggestion,
                     ))
-    return findings, {"scanned_files": scanned_files, "scanned_loc": scanned_loc,
+    return findings, {"score_version": SCORE_VERSION, "scanned_files": scanned_files, "scanned_loc": scanned_loc,
                       "unsupported_files": len(files) - scanned_files,
                       "notebook_cells_scanned": notebook_scanned, "notebook_cells_skipped": notebook_skipped,
                       "json_files_validated": json_validated, "exclusions": exclusions,

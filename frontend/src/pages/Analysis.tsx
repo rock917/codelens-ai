@@ -117,6 +117,7 @@ export default function Analysis() {
   const currentRepo = useRef<string | undefined>(undefined)
   const [refresh, setRefresh] = useState(0)
   const [severityFilter, setSeverityFilter] = useState<string>('ALL')
+  const [findingFilter, setFindingFilter] = useState<'health' | 'suggestions' | 'all'>('health')
   const [expandedIssue, setExpandedIssue] = useState<string | null>(null)
 
   useEffect(() => {
@@ -176,9 +177,11 @@ export default function Analysis() {
     }
   }
 
+  const groupedIssues = issues.filter(issue => findingFilter === 'all' || (findingFilter === 'suggestions'
+    ? issue.affects_health === false : issue.affects_health !== false))
   const filteredIssues = severityFilter === 'ALL'
-    ? issues
-    : issues.filter(i => i.severity === severityFilter)
+    ? groupedIssues
+    : groupedIssues.filter(i => i.severity === severityFilter)
 
   const severities = ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
 
@@ -304,7 +307,7 @@ export default function Analysis() {
                       </div>
                     )}
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      {issues.length} total issues in{' '}
+                      {summary?.total_issues ?? issues.length} health findings · {summary?.total_suggestions ?? 0} suggestions in{' '}
                       <span style={{ color: 'var(--text)', fontWeight: '600' }}>
                         {selectedRepo.name}
                       </span>
@@ -331,6 +334,7 @@ export default function Analysis() {
               </div>}
               {error && <div role="alert" style={{ padding: '12px 24px', color: 'var(--danger)' }}>{error} <button className="btn-secondary" onClick={() => setRefresh(v => v + 1)}>Refresh results</button></div>}
               {summary && <div role="status" style={{ padding: '12px 24px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7 }}>
+                {summary.requires_rescan && <div>Scoring rules have improved. Style suggestions no longer reduce health. Run analysis to refresh findings with the updated detectors; rescans use no credits.</div>}
                 {running ? 'Analysis is running. Displayed findings are from the last completed scan.' :
                   summary.analysis_status === 'NOT_RUN' ? 'Not analyzed yet. Run a scan to calculate health.' :
                   summary.analysis_status === 'STALE' ? 'The source index changed. Run analysis to calculate current results.' :
@@ -342,16 +346,25 @@ export default function Analysis() {
                 {!!summary.coverage?.json_files_validated && <div>{summary.coverage.json_files_validated} JSON files validated separately; excluded from the health score.</div>}
                 {!!summary.coverage?.exclusions?.length && <details><summary>Validation and coverage details</summary><ul>{summary.coverage.exclusions.map((item, i) => <li key={i}>{item.path}: {item.reason}</li>)}</ul></details>}
                 {summary.health_score != null && <details><summary style={{ cursor: 'pointer' }}>How is health calculated?</summary>
-                  Severity-weighted findings per 1,000 scanned lines (minimum 1,000): critical ×15, high ×8, medium ×3, low ×1.
-                  Score = 100 / (1 + density / 20), rounded. Critical findings cap the score at 49; high findings at 79.
+                  Only security-risk findings, high branching complexity, and deep nesting affect health. Line length is not checked.
+                  TODOs, print statements, unused imports, empty functions, and size/parameter-count suggestions have no score penalty.
+                  Scored findings are weighted per 1,000 scanned lines (minimum 1,000): critical ×15, high ×8, medium ×3, low ×1.
+                  Score = 100 / (1 + density / 20), rounded. Critical security findings cap the score at 49; high security findings at 79.
                   This heuristic helps prioritize review. Findings can be false positives; a high score does not guarantee secure code.
                 </details>}
               </div>}
               {/* Severity filter */}
+              <div role="group" aria-label="Finding category" style={{ padding: '12px 24px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {([['health', 'Health findings'], ['suggestions', 'Suggestions (no score impact)'], ['all', 'All findings']] as const).map(([value, label]) =>
+                  <button key={value} className="account-button" aria-pressed={findingFilter === value}
+                    style={{ borderColor: findingFilter === value ? 'var(--primary)' : 'var(--border)' }}
+                    onClick={() => { setFindingFilter(value); setSeverityFilter('ALL'); setExpandedIssue(null) }}>{label}</button>
+                )}
+              </div>
               <div style={{
                 padding: '12px 24px',
                 borderBottom: '1px solid var(--border)',
-                display: 'flex', alignItems: 'center', gap: '8px',
+                display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
                 background: 'var(--bg-surface)'
               }}>
                 <Filter size={12} color="var(--text-muted)" />
@@ -372,12 +385,12 @@ export default function Analysis() {
                     {sev}
                     {sev !== 'ALL' && summary && (
                       <span style={{ marginLeft: '4px', opacity: 0.7 }}>
-                        ({summary.by_severity[sev] || 0})
+                        ({groupedIssues.filter(issue => issue.severity === sev).length})
                       </span>
                     )}
                     {sev === 'ALL' && (
                       <span style={{ marginLeft: '4px', opacity: 0.7 }}>
-                        ({issues.length})
+                        ({groupedIssues.length})
                       </span>
                     )}
                   </button>
@@ -404,7 +417,7 @@ export default function Analysis() {
                       ? <CheckCircle size={40} color="var(--success)" style={{ marginBottom: 12 }} />
                       : <Shield size={40} color="var(--text-muted)" style={{ marginBottom: 12 }} />}
                     <h3 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '6px' }}>
-                      {running ? 'Scan in progress' : summary?.health_score == null ? 'Run analysis to see your results' : issues.length === 0 ? 'No findings in scanned files' : 'No issues at this severity'}
+                      {running ? 'Scan in progress' : summary?.health_score == null ? 'Run analysis to see your results' : issues.length === 0 ? 'No findings in scanned files' : 'No findings match these filters'}
                     </h3>
                     <p style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                       {issues.length === 0
@@ -459,6 +472,7 @@ export default function Analysis() {
                           }}>
                             <SeverityBadge severity={issue.severity} />
                             <IssueTypeTag type={issue.issue_type} />
+                            {issue.affects_health === false && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Suggestion · no score impact</span>}
                           </div>
                           <div style={{
                             fontSize: '13px', color: 'var(--text)',
@@ -501,6 +515,9 @@ export default function Analysis() {
                           borderTop: '1px solid var(--border)',
                           background: 'var(--bg-elevated)'
                         }}>
+                          {issue.score_reason && <p style={{ marginBottom: 12, fontSize: 12, lineHeight: 1.6 }}>
+                            <strong>{issue.affects_health === false ? 'Why this is a suggestion: ' : 'Why this affects health: '}</strong>{issue.score_reason}
+                          </p>}
                           <div style={{ marginBottom: '12px' }}>
                             <div style={{
                               fontSize: '10px', color: 'var(--text-muted)',

@@ -128,11 +128,15 @@ def analyze_complexity(
 
 def _calculate_complexity(node) -> int:
     complexity = 1
-    for child in ast.walk(node):
+    pending = list(ast.iter_child_nodes(node))
+    while pending:
+        child = pending.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue  # Nested callables have their own complexity, not the parent's.
+        pending.extend(ast.iter_child_nodes(child))
         if isinstance(child, (
-            ast.If, ast.While, ast.For, ast.ExceptHandler,
-            ast.With, ast.Assert, ast.comprehension,
-            ast.AsyncFor, ast.AsyncWith
+            ast.If, ast.IfExp, ast.While, ast.For, ast.ExceptHandler,
+            ast.comprehension, ast.AsyncFor
         )):
             complexity += 1
         elif isinstance(child, ast.BoolOp):
@@ -147,8 +151,11 @@ def _get_max_nesting(node, current_depth=0) -> int:
         ast.Try, ast.AsyncFor, ast.AsyncWith
     )
     for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
         if isinstance(child, nesting_nodes):
-            depth = _get_max_nesting(child, current_depth + 1)
+            is_elif = isinstance(node, ast.If) and child in node.orelse and isinstance(child, ast.If)
+            depth = _get_max_nesting(child, current_depth + (0 if is_elif else 1))
             max_depth = max(max_depth, depth)
         else:
             depth = _get_max_nesting(child, current_depth)

@@ -12,6 +12,7 @@ from sqlalchemy import select, func, delete
 
 from app.database.base import get_db
 from app.models.repository import Repository, File as FileModel, AnalysisIssue
+from app.services.analyzer.scoring_policy import HEALTH_RULES
 from app.schemas.repository import (
     RepositoryUploadResponse,
     GithubIngestRequest,
@@ -180,7 +181,7 @@ async def get_stats(
 
     issues_result = await db.execute(
         select(func.count(AnalysisIssue.id))
-        .where(AnalysisIssue.repository_id == repo_id)
+        .where(AnalysisIssue.repository_id == repo_id, AnalysisIssue.issue_type.in_(HEALTH_RULES))
     )
 
     issues_count = issues_result.scalar() or 0

@@ -52,11 +52,17 @@ export interface AnalysisIssue {
   message: string
   line: number
   suggestion: string
+  affects_health?: boolean
+  score_reason?: string
 }
 
 export interface AnalysisSummary {
   repository_id: string
   total_issues: number
+  total_suggestions?: number
+  total_findings?: number
+  score_version?: string
+  requires_rescan?: boolean
   by_severity: Record<string, number>
   by_type: Record<string, number>
   health_score: number | null

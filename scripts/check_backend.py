@@ -86,6 +86,95 @@ async def fake_stream(*args, **kwargs):
 
 
 class BackendChecks(unittest.IsolatedAsyncioTestCase):
+    async def test_health_rules_ignore_formatting_and_require_risk_evidence(self):
+        from app.services.analyzer.smell_analyzer import analyze_smells
+        from app.services.analyzer.security_analyzer import analyze_security
+        from app.services.analyzer.scoring_policy import score_impact
+        from app.services.analyzer.complexity_analyzer import analyze_complexity
+        for language in ('python', 'javascript', 'typescript'):
+            self.assertNotIn('LONG_LINE', [i.issue_type for i in analyze_smells('source', '# ' + 'x' * 500, language)])
+        for rule in ('DEBUG_PRINT', 'UNUSED_IMPORT', 'EMPTY_FUNCTION', 'TECHNICAL_DEBT_TODO', 'LONG_FUNCTION', 'TOO_MANY_PARAMS', 'LARGE_CLASS', 'TOO_MANY_METHODS'):
+            self.assertFalse(score_impact(rule)[0], rule)
+        source = '''import subprocess as sp
+import hashlib as hashes
+import jwt
+text = "md5 password='not-an-assignment'"
+# api_key = 'comment-is-not-a-secret'
+sp.run(['echo', value], check=True)
+sp.run(command, shell=False)
+jwt.encode(payload, key, algorithm='HS256')
+hashes.md5(data, usedforsecurity=False)
+cursor.execute('SELECT * FROM users WHERE id = %s', (value,))
+api_key = 'your_api_key'
+'''
+        self.assertEqual(analyze_security('safe.py', source, 'python'), [])
+        source += '''sp.run(f'echo {value}', shell=True)
+cursor.execute(f'SELECT * FROM users WHERE id = {value}')
+hashes.md5(data)
+api_key = 'real-looking-credential-value'
+'''
+        kinds = [i.issue_type for i in analyze_security('review.py', source, 'python')]
+        self.assertEqual(kinds.count('COMMAND_INJECTION'), 1)
+        self.assertEqual(kinds.count('SQL_INJECTION'), 1)
+        self.assertEqual(kinds.count('WEAK_HASH_MD5'), 1)
+        self.assertEqual(kinds.count('HARDCODED_SECRET'), 1)
+        nested = 'def outer():\n    def inner(x):\n' + ''.join(f'        if x == {i}: return {i}\n' for i in range(12)) + '    return inner\n'
+        issues = analyze_complexity('nested.py', nested, 'python')
+        self.assertTrue(any(i.issue_type == 'HIGH_COMPLEXITY' and i.symbol_name == 'inner' for i in issues))
+        self.assertFalse(any(i.issue_type == 'HIGH_COMPLEXITY' and i.symbol_name == 'outer' for i in issues))
+        chain = 'def choose(x):\n    if x == 0: return 0\n' + ''.join(f'    elif x == {i}: return {i}\n' for i in range(1, 8))
+        self.assertFalse(any(i.issue_type == 'DEEP_NESTING' for i in analyze_complexity('chain.py', chain, 'python')))
+
+    async def test_health_policy_separates_legacy_suggestions_counts_and_security(self):
+        from app.models.repository import AnalysisIssue, RepositoryJob, File
+        repo = await self.upload()
+        async with AsyncSessionLocal() as db:
+            file = await db.scalar(select(File).where(File.repository_id == repo))
+            for index, kind in enumerate(('LONG_LINE', 'WEAK_JWT_ALG', 'DEBUG_PRINT', 'LONG_FUNCTION', 'TECHNICAL_DEBT_TODO')):
+                db.add(AnalysisIssue(id=f'noise-{index}', repository_id=repo, file_id=file.id, issue_type=kind, severity='HIGH', message=kind))
+            db.add(RepositoryJob(id='old-scan', repository_id=repo, job_type='ANALYSIS', status='COMPLETED', message=json.dumps({'scanned_files': 1, 'scanned_loc': 100000})))
+            await db.commit()
+        summary = (await self.client.get(f'/analysis/{repo}/summary')).json()
+        self.assertEqual(summary['health_score'], 100)
+        self.assertEqual(summary['total_issues'], 0)
+        self.assertEqual(summary['total_suggestions'], 3)
+        self.assertTrue(summary['requires_rescan'])
+        self.assertEqual((await self.client.get(f'/repositories/{repo}/stats')).json()['issues_count'], 0)
+        findings = (await self.client.get(f'/analysis/{repo}/issues')).json()
+        self.assertEqual(len(findings), 3)
+        self.assertTrue(all(not i['affects_health'] and i['score_reason'] for i in findings))
+        async with AsyncSessionLocal() as db:
+            db.add(AnalysisIssue(id='complex', repository_id=repo, file_id=file.id, issue_type='HIGH_COMPLEXITY', severity='HIGH', message='Complex branching'))
+            await db.commit()
+        self.assertGreater((await self.client.get(f'/analysis/{repo}/summary')).json()['health_score'], 79)
+        async with AsyncSessionLocal() as db:
+            db.add(AnalysisIssue(id='risk', repository_id=repo, file_id=file.id, issue_type='UNSAFE_EVAL', severity='CRITICAL', message='Dynamic evaluation'))
+            await db.commit()
+        summary = (await self.client.get(f'/analysis/{repo}/summary')).json()
+        self.assertLessEqual(summary['health_score'], 49)
+        self.assertEqual(summary['total_issues'], 2)
+        self.assertEqual(summary['total_findings'], 5)
+        self.assertEqual((await self.client.get(f'/analysis/{repo}/summary', headers={'Authorization': 'Bearer user-b'})).status_code, 404)
+
+    async def test_health_rules_refresh_cached_results_without_using_credit(self):
+        from app.models.repository import RepositoryJob
+        repo = await self.upload()
+        path = f'/analysis/{repo}'
+        first = await self.client.post(path)
+        self.assertFalse(first.json()['cached'])
+        self.assertTrue((await self.client.post(path)).json()['cached'])
+        async with AsyncSessionLocal() as db:
+            job = await db.get(RepositoryJob, first.json()['job_id'])
+            old = json.loads(job.message)
+            old.pop('score_version')
+            job.message = json.dumps(old)
+            await db.commit()
+        self.assertFalse((await self.client.post(path)).json()['cached'])
+        summary = (await self.client.get(path + '/summary')).json()
+        self.assertEqual(summary['score_version'], 'risk-density-v2')
+        self.assertFalse(summary['requires_rescan'])
+        self.assertEqual((await self.client.get('/repositories/usage')).json()['used'], 1)
+
     async def test_export_empty_account_auth_and_limits(self):
         from app.services import account_export as exports
         denied = await self.client.get('/account/export', headers={'Authorization': ''})
