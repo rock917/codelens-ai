@@ -14,6 +14,8 @@ api.interceptors.request.use(async config => {
 
 // ── Repository ──────────────────────────────────────────────
 export const getDeletionStatus = () => api.get('/account/deletion')
+export const exportAccountData = (signal: AbortSignal) =>
+  api.get<Blob>('/account/export', { responseType: 'blob', timeout: 120000, signal })
 export const deleteAccount = (email: string, confirmation: string) =>
   api.delete('/account/deletion', { data: { email, confirmation } })
 

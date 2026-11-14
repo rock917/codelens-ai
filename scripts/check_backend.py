@@ -86,6 +86,142 @@ async def fake_stream(*args, **kwargs):
 
 
 class BackendChecks(unittest.IsolatedAsyncioTestCase):
+    async def test_export_empty_account_auth_and_limits(self):
+        from app.services import account_export as exports
+        denied = await self.client.get('/account/export', headers={'Authorization': ''})
+        self.assertEqual(denied.status_code, 401)
+        for attempt in range(3):
+            response = await self.client.get('/account/export')
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()
+            self.assertEqual(data['account']['id'], USER_A)
+            self.assertEqual(data['repositories'], [])
+            self.assertEqual(data['messages'], [])
+            self.assertEqual(data['usage']['used'], 0)
+            self.assertIn('no-store', response.headers['cache-control'])
+            self.assertIn('attachment;', response.headers['content-disposition'])
+            self.assertEqual(int(response.headers['content-length']), len(response.content))
+            self.assertNotIn(USER_A, exports.active_exports)
+        self.assertEqual((await self.client.get('/account/export')).status_code, 429)
+
+    async def test_export_snapshot_includes_saved_data_and_excludes_other_accounts(self):
+        from app.models.repository import File, Symbol, AnalysisIssue, RepositoryJob, CodeChunk
+        from app.models.conversation import Conversation, Message
+        from app.models.summary import RepositorySummary
+        from app.models.usage import AnalysisAdmission
+        async with AsyncSessionLocal() as db:
+            for index, owner in enumerate((USER_A, USER_B, None)):
+                prefix = str(index)
+                db.add(Repository(id=prefix, owner_id=owner, name='repo-' + prefix, source_type='zip', languages='{"python":1}'))
+                await db.flush()
+                db.add(File(id=prefix, repository_id=prefix, path='sample.py', summary='summary-' + prefix))
+                db.add(Conversation(id=prefix, repository_id=prefix, title='chat-' + prefix))
+                db.add(RepositorySummary(id=prefix, repository_id=prefix, summary_type='repository', content='saved-' + prefix))
+                await db.flush()
+                db.add(Symbol(id=prefix, file_id=prefix, name='symbol-' + prefix, type='function'))
+                db.add(AnalysisIssue(id=prefix, repository_id=prefix, file_id=prefix, issue_type='TEST', severity='LOW', message='issue-' + prefix))
+                db.add(RepositoryJob(id=prefix, repository_id=prefix, job_type='ANALYSIS', status='COMPLETED', message=json.dumps({'scanned_files': 1, 'scanned_loc': 12, 'cache_key': 'private-cache-marker'})))
+                db.add(Message(id=prefix, conversation_id=prefix, role='user', content='hello-' + prefix))
+                db.add(CodeChunk(id=prefix, file_id=prefix, repository_id=prefix, file_path='sample.py', content='excluded-raw-source-marker'))
+            for index in range(105):
+                db.add(Message(id=f'paged-{index:03}', conversation_id='0', role='assistant', content='café 🌿 "quoted"\nline', sources='[{"path":"sample.py"}]'))
+            db.add(AnalysisAdmission(repository_id='deleted-repository', owner_id=USER_A, status='COMPLETED', source_key='private-cache-marker', revision='private-revision'))
+            db.add(AnalysisAdmission(repository_id='other-usage', owner_id=USER_B, status='COMPLETED', source_key='other', revision='other'))
+            await db.commit()
+        response = await self.client.get('/account/export?owner_id=' + USER_B)
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        for key in ('repositories', 'files', 'symbols', 'analysis_issues', 'analysis_runs', 'summaries', 'conversations'):
+            self.assertEqual(len(data[key]), 1, key)
+            self.assertEqual(data[key][0]['id'], '0')
+        self.assertEqual(data['repositories'][0]['languages'], {'python': 1})
+        self.assertEqual(data['analysis_runs'][0]['coverage']['scanned_files'], 1)
+        self.assertEqual(len(data['messages']), 106)
+        self.assertEqual(data['messages'][-1]['content'], 'café 🌿 "quoted"\nline')
+        self.assertEqual(data['messages'][-1]['sources'], [{'path': 'sample.py'}])
+        self.assertEqual(data['manifest']['row_counts']['messages'], 106)
+        self.assertEqual(data['usage']['used'], 1)
+        self.assertEqual(data['usage_history'][0]['repository_id'], 'deleted-repository')
+        for forbidden in ('private-cache-marker', 'private-revision', 'excluded-raw-source-marker', USER_B, 'other-usage', 'chat-1', 'chat-2'):
+            self.assertNotIn(forbidden, response.text)
+        self.assertEqual((await self.client.get('/account/export', headers={'Authorization': 'Bearer user-b'})).json()['repositories'][0]['id'], '1')
+        groq_provider.chat.assert_not_called()
+
+    async def test_export_failure_closes_temporary_storage_and_releases_capacity(self):
+        from app.services import account_export as exports
+        original = tempfile.SpooledTemporaryFile
+        opened = []
+        def tracked(*args, **kwargs):
+            value = original(*args, **kwargs)
+            opened.append(value)
+            return value
+        with patch.object(exports.tempfile, 'SpooledTemporaryFile', side_effect=tracked), patch.object(exports, 'MAX_BYTES', 100):
+            result = await self.client.get('/account/export')
+        self.assertEqual(result.status_code, 413)
+        self.assertNotIn('content-disposition', result.headers)
+        self.assertTrue(opened[0].closed)
+        self.assertNotIn(USER_A, exports.active_exports)
+        exports.active_exports.add(USER_A)
+        try:
+            self.assertEqual((await self.client.get('/account/export')).status_code, 429)
+        finally:
+            exports.active_exports.clear()
+        with patch.object(exports, 'usage', new=AsyncMock(side_effect=RuntimeError('secret diagnostic'))):
+            failed = await self.client.get('/account/export')
+        self.assertEqual(failed.status_code, 503)
+        self.assertNotIn('secret diagnostic', failed.text)
+        self.assertNotIn(USER_A, exports.active_exports)
+        self.assertEqual((await self.client.get('/account/export')).status_code, 200)
+
+    async def test_export_response_cleanup_on_interrupted_download(self):
+        from app.services import account_export as exports
+        spool = tempfile.SpooledTemporaryFile(max_size=1, mode='w+b')
+        spool.write(b'{}')  # Exercise disk-backed temporary storage as well.
+        exports.active_exports.add(USER_A)
+        response = exports.ExportResponse(spool, USER_A, 'test.json')
+        async def receive():
+            await asyncio.sleep(10)
+        async def send(message):
+            raise RuntimeError('disconnected')
+        with self.assertRaises(Exception):
+            await response({'type': 'http', 'asgi': {'spec_version': '2.4'}}, receive, send)
+        self.assertTrue(spool.closed)
+        self.assertNotIn(USER_A, exports.active_exports)
+
+    async def test_export_row_limit_timeout_and_deletion_guard(self):
+        from app.services import account_export as exports
+        from app.services.account_deletion import closing
+        async with AsyncSessionLocal() as db:
+            db.add(Repository(id='export-limit', owner_id=USER_A, name='Export limit', source_type='zip'))
+            await db.commit()
+        with patch.object(exports, 'MAX_ROWS', 0):
+            limited = await self.client.get('/account/export')
+        self.assertEqual(limited.status_code, 413)
+        self.assertNotIn('content-disposition', limited.headers)
+        with patch.object(exports, 'usage', new=AsyncMock(side_effect=TimeoutError())):
+            timed_out = await self.client.get('/account/export')
+        self.assertEqual(timed_out.status_code, 503)
+        self.assertIn('timed out', timed_out.json()['detail'])
+        self.assertNotIn(USER_A, exports.active_exports)
+        closing.add(USER_A)
+        try:
+            self.assertEqual((await self.client.get('/account/export')).status_code, 409)
+        finally:
+            closing.discard(USER_A)
+        original = tempfile.SpooledTemporaryFile
+        opened = []
+        def tracked(*args, **kwargs):
+            kwargs['max_size'] = 1  # Success path also exercises a disk-backed spool.
+            value = original(*args, **kwargs)
+            opened.append(value)
+            return value
+        with patch.object(exports.tempfile, 'SpooledTemporaryFile', side_effect=tracked):
+            complete = await self.client.get('/account/export')
+        self.assertEqual(complete.status_code, 200)
+        self.assertEqual(len(complete.json()['repositories']), 1)
+        self.assertTrue(opened[0].closed)
+        self.assertNotIn(USER_A, exports.active_exports)
+
     async def test_compiled_languages_parsing_boundaries_and_rules(self):
         from language_fixtures import JAVA, GO, CPP
         from app.services.parser.compiled_parser import CompiledParser
@@ -237,6 +373,9 @@ class BackendChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post('/generate/tests', json={**body, 'symbol_id': overload['id']})).status_code, 404)
 
     async def asyncSetUp(self):
+        from app.services import account_export
+        account_export.limiter.windows.clear()
+        account_export.active_exports.clear()
         from app.services.account_deletion import recently_deleted
         recently_deleted.clear()
         await init_db()

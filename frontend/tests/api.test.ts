@@ -1,8 +1,26 @@
 import { afterEach, expect, it, vi } from 'vitest'
 const auth = vi.hoisted(() => ({ getAccessToken: vi.fn() }))
 vi.mock('../src/auth/client', () => auth)
-import api, { sendMessageStream } from '../src/services/api'
+import api, { sendMessageStream, exportAccountData } from '../src/services/api'
 afterEach(() => vi.unstubAllGlobals())
+it('exports through the authenticated API as a cancellable Blob download', async () => {
+  auth.getAccessToken.mockResolvedValueOnce('export-token')
+  const original = api.defaults.adapter
+  const captured: any[] = []
+  api.defaults.adapter = async config => {
+    captured.push(config)
+    return { data: new Blob(['{}']), status: 200, statusText: 'OK', headers: {}, config }
+  }
+  try {
+    const controller = new AbortController()
+    await exportAccountData(controller.signal)
+    expect(captured[0].url).toBe('/account/export')
+    expect(captured[0].headers.Authorization).toBe('Bearer export-token')
+    expect(captured[0].responseType).toBe('blob')
+    expect(captured[0].signal).toBe(controller.signal)
+    expect(captured[0].timeout).toBe(120000)
+  } finally { api.defaults.adapter = original }
+})
 it('obtains a current token for every API request and account switch', async () => {
   auth.getAccessToken.mockResolvedValueOnce('account-a').mockResolvedValueOnce('account-b')
   const headers: unknown[] = []

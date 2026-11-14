@@ -10,6 +10,12 @@ from app.services.account_deletion import enabled, start_deletion
 router = APIRouter(prefix='/account', tags=['account'])
 
 
+@router.get('/export')
+async def export_account(user: AuthUser = Depends(get_current_user)):
+    from app.services.account_export import build_export
+    return await build_export(user)
+
+
 @router.get('/me')
 async def account(user: AuthUser = Depends(get_current_user)):
     return {'id': user.id, 'email': user.email}

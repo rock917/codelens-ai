@@ -6,6 +6,7 @@ import { supabase } from '../auth/client'
 import { getDeletionStatus, deleteAccount } from '../services/api'
 import TopBar from '../components/layout/TopBar'
 import Appearance from '../theme/Appearance'
+import DataExport from '../components/DataExport'
 import './settings.css'
 import { AccountDialog, BusyLabel, useToast } from '../components/ui/AccountFeedback'
 
@@ -77,6 +78,7 @@ export default function Settings() {
         <p style={{ overflowWrap: 'anywhere', marginTop: 12 }}>{session?.user.email}</p>
       </section>
       <Appearance />
+      <DataExport key={session?.user.id} accountId={session?.user.id} />
       <section className="card" style={{ padding: 24, marginTop: 24, borderColor: 'var(--danger)' }} aria-labelledby="delete-heading">
         <h2 id="delete-heading">Danger Zone</h2>
         <p style={{ marginTop: 16, lineHeight: 1.7 }}>Permanently remove your CodeLens login, saved repositories, source files, vector indexes, chats, analysis results and usage history. This cannot be undone.</p>
